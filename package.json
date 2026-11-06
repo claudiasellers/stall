@@ -1,0 +1,30 @@
+{
+  "name": "stall",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Feature-request queue with a Claude worker orchestrator (4 worktree lanes + an integration lane).",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "app": "node --disable-warning=ExperimentalWarning app/src/server.ts",
+    "orchestrator": "node --disable-warning=ExperimentalWarning orchestrator/src/index.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test test/*.test.ts",
+    "e2e": "node --disable-warning=ExperimentalWarning scripts/e2e.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.319",
+    "express": "^5.1.0",
+    "libsql": "^0.5.29",
+    "web-push": "^4.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.15.0",
+    "@types/web-push": "^3.6.4",
+    "typescript": "^5.8.0"
+  }
+}

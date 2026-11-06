@@ -1,0 +1,36 @@
+# One-click deploy of the Stall web app on Render's free plan.
+# Data lives in a free Turso database (Render's free disk is wiped on every restart).
+services:
+  - type: web
+    name: stall
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: node --disable-warning=ExperimentalWarning app/src/server.ts
+    healthCheckPath: /api/v1/config
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: TRUST_PROXY
+        value: "true"
+      - key: ALLOW_SIGNUP
+        value: "true"
+      - key: VOTE_MIN_UPVOTES
+        value: "3"
+      - key: CONSENSUS_RATIO
+        value: "0.7"
+      - key: REJECT_MIN_DOWNVOTES
+        value: "3"
+      # Shared with the builder (orchestrator) when you run it.
+      - key: STALL_ORCH_TOKEN
+        generateValue: true
+      - key: STALL_WEBHOOK_SECRET
+        generateValue: true
+      # From the Turso dashboard: database URL (libsql://...) and a token.
+      - key: TURSO_DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
