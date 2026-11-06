@@ -19,7 +19,7 @@ async function api(path, { method = 'GET', body } = {}) {
   try {
     res = await fetch(`/api/v1${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin' });
   } catch {
-    throw new ApiError(0, 'You appear to be offline.');
+    throw new ApiError(0, 'Looks like you’re offline. Check your connection and try again.');
   }
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && path !== '/auth/login') {
@@ -74,17 +74,44 @@ const icon = (name, cls) =>
   h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', class: cls, 'aria-hidden': 'true' }, h('path', { d: ICONS[name] }));
 
 const STATUS_LABEL = {
-  proposed: 'Voting',
-  queued: 'Queued',
-  in_progress: 'Building',
-  needs_info: 'Needs your answer',
-  integrating: 'Integrating',
-  done: 'Shipped',
-  failed: 'Failed',
-  rejected: 'Rejected',
-  cancelled: 'Cancelled',
+  proposed: '🗳️ Gathering votes',
+  queued: '⏳ In line',
+  in_progress: '🔨 Being built',
+  needs_info: '🙋 Needs your answer',
+  integrating: '✨ Final checks',
+  done: '🎉 Live!',
+  failed: '😵 Hit a snag',
+  rejected: '🙅 Not this time',
+  cancelled: '🫥 Cancelled',
 };
 const pill = (status) => h('span', { class: `pill ${status}` }, STATUS_LABEL[status] || status);
+
+// Every request gets a stable emoji sticker, picked from its words when we can.
+const STICKER_WORDS = [
+  [/dark|night|theme|colou?r|design|look|style/i, '🎨'], [/search|find|filter/i, '🔎'], [/email|mail|digest|newsletter/i, '💌'],
+  [/notif|alert|remind|push/i, '🔔'], [/photo|image|picture|avatar|camera/i, '📸'], [/chat|message|comment|reply/i, '💬'],
+  [/pay|money|price|checkout|tip/i, '💸'], [/calendar|date|schedule|event|time/i, '📅'], [/map|location|place|near/i, '📍'],
+  [/music|song|sound|audio/i, '🎵'], [/video|stream|watch/i, '🎬'], [/export|download|csv|share/i, '📦'], [/fast|speed|slow|perf/i, '⚡'],
+  [/emoji|react|like|heart/i, '💖'], [/login|account|profile|password/i, '🔑'], [/game|fun|party/i, '🎉'], [/food|recipe|menu/i, '🍜'],
+];
+const FALLBACK = ['🌈', '🪩', '🍓', '🦄', '🌵', '🧃', '🪐', '🍩', '🐙', '🌻', '🎈', '🧁', '🦋', '🍉', '🛼', '🌮'];
+const COLORS = ['#ff4fa3', '#ff8a3d', '#ffd23f', '#b6f36a', '#6fd3ff', '#9b6bff', '#ff6b6b', '#3dffc5'];
+const hash = (s) => [...String(s)].reduce((a, c) => (a * 31 + c.charCodeAt(0)) >>> 0, 7);
+function sticker(r, big) {
+  const hit = STICKER_WORDS.find(([re]) => re.test(r.title));
+  const n = hash(r.id + r.title);
+  return h('div', { class: `sticker ${big ? 'big' : ''}`, style: `background:${COLORS[n % COLORS.length]}`, 'aria-hidden': 'true' }, hit ? hit[1] : FALLBACK[n % FALLBACK.length]);
+}
+
+function confetti(n = 90) {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const box = h('div', { class: 'confetti', 'aria-hidden': 'true' });
+  for (let i = 0; i < n; i++) {
+    box.append(h('i', { style: `left:${Math.random() * 100}%;background:${COLORS[i % COLORS.length]};animation-duration:${1.6 + Math.random() * 1.6}s;animation-delay:${Math.random() * 0.4}s;transform:rotate(${Math.random() * 360}deg)` }));
+  }
+  document.body.append(box);
+  setTimeout(() => box.remove(), 3800);
+}
 
 function ago(iso) {
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -132,7 +159,7 @@ async function render() {
       await r.view({ ...m.groups }, () => seq === renderSeq);
     } catch (e) {
       if (seq !== renderSeq) return;
-      mount(shell({ title: 'Stall', tab: null }, h('div', { class: 'empty' }, h('p', {}, e.message || 'Something went wrong'), h('button', { class: 'btn ghost sm', onclick: render }, 'Try again'))));
+      mount(shell({ title: 'Stall', tab: null }, h('div', { class: 'empty' }, h('div', { class: 'e' }, '🙈'), h('strong', {}, 'Something went wrong'), h('p', { class: 'small' }, e.message || ''), h('button', { class: 'btn ghost sm', onclick: render }, 'Try again'))));
     }
     return;
   }
@@ -150,19 +177,19 @@ function shell({ title, tab, back, fab = true }, ...content) {
     'header',
     { class: 'topbar' },
     back ? h('button', { class: 'iconbtn', 'aria-label': 'Back', onclick: () => (history.length > 1 ? history.back() : go(back)) }, icon('back')) : null,
-    h('div', { class: 'title' }, title),
+    h('div', { class: 'title' }, back ? title : [h('img', { src: '/icons/icon-192.png', alt: '' }), 'Stall']),
     h(
       'a',
       { class: 'iconbtn', href: '#/notifications', 'aria-label': `Notifications${state.unread ? `, ${state.unread} unread` : ''}` },
       icon('bell'),
-      state.unread ? h('span', { class: 'dot', id: 'bell-dot' }, state.unread > 99 ? '99+' : state.unread) : null,
+      state.unread ? h('span', { class: 'dot' }, state.unread > 99 ? '99+' : state.unread) : null,
     ),
   );
   const tabs = [
-    ['/', 'vote', 'Vote'],
-    ['/board', 'board', 'Build'],
+    ['/', 'vote', 'Ideas'],
+    ['/board', 'board', 'Building'],
     ['/mine', 'mine', 'Mine'],
-    ['/account', 'account', 'Account'],
+    ['/account', 'account', 'You'],
   ];
   const bar = h(
     'nav',
@@ -170,10 +197,9 @@ function shell({ title, tab, back, fab = true }, ...content) {
     tabs.map(([href, ic, label]) => h('a', { href: `#${href}`, class: tab === ic ? 'on' : '', 'aria-current': tab === ic ? 'page' : null }, icon(ic), label)),
   );
   const nodes = [top, h('main', {}, ...content), bar];
-  if (fab) nodes.push(h('button', { class: 'fab', onclick: () => go('/new') }, icon('plus'), 'Request'));
+  if (fab) nodes.push(h('button', { class: 'fab', onclick: () => go('/new') }, icon('plus'), 'New idea'));
   return h('div', { class: 'shell' }, nodes);
 }
-window.addEventListener('scroll', () => document.querySelector('.topbar')?.classList.toggle('scrolled', window.scrollY > 4), { passive: true });
 
 function updateBell() {
   const btn = document.querySelector('.topbar a.iconbtn');
@@ -183,13 +209,18 @@ function updateBell() {
   if ('setAppBadge' in navigator) (state.unread ? navigator.setAppBadge(state.unread) : navigator.clearAppBadge()).catch(() => {});
 }
 
+const head = (kicker, title, sub) => h('div', { class: 'page-head' }, kicker ? h('div', { class: 'kicker' }, kicker) : null, h('h1', {}, title), sub ? h('p', {}, sub) : null);
+
 // ---------------------------------------------------------------- components
 function voteControl(r, onChange) {
   const cast = async (value) => {
     const next = r.myVote === value ? 0 : value;
     try {
       const { request } = await api(`/requests/${r.id}/vote`, { method: 'POST', body: { value: next } });
-      if (request.status === 'queued' && r.status === 'proposed') toast('Consensus reached. It is in the build queue.');
+      if (request.status === 'queued' && r.status === 'proposed') {
+        confetti();
+        toast('It got enough votes! Claude will build it 🎉');
+      }
       onChange?.(request);
     } catch (e) {
       toast(e.message);
@@ -199,9 +230,9 @@ function voteControl(r, onChange) {
   return h(
     'div',
     { class: 'votes', onclick: (e) => e.preventDefault() },
-    h('button', { class: `up ${r.myVote === 1 ? 'on' : ''}`, 'aria-label': 'Upvote', 'aria-pressed': String(r.myVote === 1), disabled, onclick: () => cast(1) }, icon('up')),
-    h('span', { class: 'n', 'aria-label': `${r.score} net votes` }, r.score),
-    h('button', { class: `down ${r.myVote === -1 ? 'on' : ''}`, 'aria-label': 'Downvote', 'aria-pressed': String(r.myVote === -1), disabled, onclick: () => cast(-1) }, icon('down')),
+    h('button', { class: `up ${r.myVote === 1 ? 'on' : ''}`, 'aria-label': 'I want this', 'aria-pressed': String(r.myVote === 1), disabled, onclick: () => cast(1) }, icon('up')),
+    h('span', { class: 'n', 'aria-label': `${r.score} votes` }, r.score),
+    h('button', { class: `down ${r.myVote === -1 ? 'on' : ''}`, 'aria-label': 'Not for me', 'aria-pressed': String(r.myVote === -1), disabled, onclick: () => cast(-1) }, icon('down')),
   );
 }
 
@@ -211,33 +242,34 @@ function consensusBar(r) {
   const total = r.upvotes + r.downvotes;
   const yes = total ? r.upvotes / total : 0;
   const pct = Math.min(1, r.upvotes / c.minUpvotes) * Math.min(1, yes / c.ratio);
-  return h('div', { class: 'stack', style: null }, h('div', { class: 'progress', role: 'progressbar', 'aria-valuenow': Math.round(pct * 100), 'aria-valuemin': 0, 'aria-valuemax': 100 }, h('i', { style: `width:${Math.round(pct * 100)}%` })));
+  return h('div', { class: 'progress', role: 'progressbar', 'aria-label': 'Votes needed', 'aria-valuenow': Math.round(pct * 100), 'aria-valuemin': 0, 'aria-valuemax': 100 }, h('i', { style: `width:${Math.max(4, Math.round(pct * 100))}%` }));
 }
 
 function requestCard(r, { onChange, showVotes = true, prefix } = {}) {
+  const side = prefix ?? (showVotes ? voteControl(r, onChange) : null);
   return h(
     'a',
-    { class: 'card req', href: `#/requests/${r.id}`, style: showVotes || prefix ? null : 'grid-template-columns:1fr' },
-    prefix ?? (showVotes ? voteControl(r, onChange) : null),
+    { class: 'card req', href: `#/requests/${r.id}`, style: side ? null : 'grid-template-columns:1fr' },
+    prefix ?? null,
     h(
       'div',
       { class: 'body' },
-      h('div', { class: 't' }, r.title),
+      h('div', { class: 'top' }, sticker(r), h('div', { class: 't' }, r.title)),
       h('div', { class: 'd' }, r.description),
       consensusBar(r),
       h(
         'div',
         { class: 'meta' },
         pill(r.status),
-        r.lane ? h('span', {}, r.lane === 'integration' ? 'Integration lane' : `Lane ${r.lane}`) : null,
         r.consensus ? h('span', {}, r.consensus) : null,
         h('span', {}, `${r.mine ? 'You' : r.submitter} · ${ago(r.createdAt)}`),
       ),
     ),
+    !prefix && showVotes ? side : null,
   );
 }
 
-const empty = (text, sub) => h('div', { class: 'empty' }, icon('inbox'), h('strong', {}, text), sub ? h('p', { class: 'small' }, sub) : null);
+const empty = (emoji, text, sub) => h('div', { class: 'empty' }, h('div', { class: 'e' }, emoji), h('strong', {}, text), sub ? h('p', { class: 'small' }, sub) : null);
 
 // Kept for call sites; styles are applied through CSSOM in h().
 const applyStyles = (node) => node;
@@ -247,7 +279,7 @@ function authView(mode) {
   return async () => {
     const isLogin = mode === 'login';
     const err = h('p', { class: 'error', role: 'alert' });
-    const submit = h('button', { class: 'btn block', type: 'submit' }, isLogin ? 'Sign in' : 'Create account');
+    const submit = h('button', { class: 'btn block hot', type: 'submit' }, isLogin ? 'Let me in' : 'Join Stall');
     const form = h(
       'form',
       {
@@ -270,7 +302,7 @@ function authView(mode) {
           }
         },
       },
-      h('label', { class: 'field' }, 'Username', h('input', { type: 'text', name: 'username', autocomplete: 'username', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', required: true, minlength: 3, maxlength: 32 })),
+      h('label', { class: 'field' }, 'Username', h('input', { type: 'text', name: 'username', autocomplete: 'username', autocapitalize: 'none', autocorrect: 'off', spellcheck: 'false', required: true, minlength: 3, maxlength: 32, placeholder: 'yourname' })),
       h(
         'label',
         { class: 'field' },
@@ -282,20 +314,27 @@ function authView(mode) {
       submit,
     );
     const canSignup = state.config?.allowSignup !== false;
+    const floaties = h('div', { class: 'floaties', 'aria-hidden': 'true' },
+      [['💡', '64%', '5%', '0s'], ['🎉', '84%', '13%', '1s'], ['✨', '74%', '24%', '1.5s']]
+        .map(([e, x, y, d]) => h('span', { style: `left:${x};top:${y};animation-delay:${d}` }, e)));
     mount(
+      floaties,
       h(
         'div',
         { class: 'auth' },
         h(
           'div',
           { class: 'box' },
-          h('div', { class: 'brand' }, h('img', { src: '/icons/icon-192.png', alt: '' }), h('h1', {}, 'Stall'), h('p', {}, 'Vote on features. Watch Claude build them.')),
+          h('div', { class: 'brand' },
+            h('img', { src: '/icons/icon-192.png', alt: '' }),
+            h('h1', {}, 'Ideas in.', h('br'), h('em', {}, 'Features out.')),
+            h('p', {}, 'Share an idea, get your friends to vote, and Claude builds the winners.')),
           form,
           isLogin
             ? canSignup
-              ? h('p', { class: 'switch' }, 'New here? ', h('a', { href: '#/signup' }, 'Create an account'))
+              ? h('p', { class: 'switch' }, 'New here? ', h('a', { href: '#/signup' }, 'Make an account'))
               : null
-            : h('p', { class: 'switch' }, 'Have an account? ', h('a', { href: '#/login' }, 'Sign in')),
+            : h('p', { class: 'switch' }, 'Already have an account? ', h('a', { href: '#/login' }, 'Sign in')),
           installHint(),
         ),
       ),
@@ -305,13 +344,13 @@ function authView(mode) {
 route('/login(?:\\?.*)?', authView('login'), { public: true });
 route('/signup(?:\\?.*)?', authView('signup'), { public: true });
 
-// ---------------------------------------------------------------- views: vote
+// ---------------------------------------------------------------- views: ideas (vote)
 let voteScope = 'proposed';
 route('/', async (_p, alive) => {
   const scopes = [
-    ['proposed', 'Open for votes'],
-    ['active', 'Approved'],
-    ['done', 'Shipped'],
+    ['proposed', '🗳️ Vote now'],
+    ['active', '🔨 Happening'],
+    ['done', '🎉 Live'],
   ];
   const listEl = h('div', { class: 'list' });
   const seg = h(
@@ -325,24 +364,28 @@ route('/', async (_p, alive) => {
     const { requests } = await api(`/requests?scope=${voteScope}`);
     if (!alive()) return;
     const c = state.config?.consensus;
-    fill(listEl, 
-      ...(requests.length
-        ? requests.map((r) => applyStyles(requestCard(r, { onChange: load, showVotes: voteScope !== 'done' })))
-        : [empty(voteScope === 'proposed' ? 'Nothing to vote on yet' : 'Nothing here yet', voteScope === 'proposed' ? 'Tap Request to suggest a feature.' : null)]),
+    const emptyState = {
+      proposed: empty('💡', 'No ideas yet', 'Tap New idea to suggest the first one.'),
+      active: empty('🛋️', 'Nothing in the works', 'Ideas show up here once they get enough votes.'),
+      done: empty('🌱', 'Nothing live yet', 'Finished ideas will show up here.'),
+    }[voteScope];
+    fill(listEl,
+      voteScope === 'proposed' && c?.minUpvotes > 0 && requests.length
+        ? h('p', { class: 'muted small' }, `An idea gets built once ${c.minUpvotes} people want it and most votes are yes. Admins can also give it the green light.`)
+        : null,
+      ...(requests.length ? requests.map((r) => requestCard(r, { onChange: load, showVotes: voteScope !== 'done' })) : [emptyState]),
     );
-    if (voteScope === 'proposed' && c?.minUpvotes > 0 && requests.length)
-      listEl.prepend(h('p', { class: 'muted small' }, `A request is built once it has ${c.minUpvotes}+ upvotes with ${Math.round(c.ratio * 100)}% yes, or an admin approves it.`));
   };
   await load();
   if (!alive()) return;
   currentRefresh = load;
-  mount(shell({ title: 'Stall', tab: 'vote' }, h('div', { class: 'page-head' }, h('h1', {}, 'Requests')), seg, listEl));
+  mount(shell({ tab: 'vote' }, head('Stall', 'What should we build next?'), seg, listEl));
 });
 
 // ---------------------------------------------------------------- views: new
 route('/new', async () => {
   const err = h('p', { class: 'error', role: 'alert' });
-  const submit = h('button', { class: 'btn block', type: 'submit' }, 'Submit for votes');
+  const submit = h('button', { class: 'btn block hot', type: 'submit' }, 'Share my idea');
   const draftKey = 'stall:draft';
   let draft = {};
   try { draft = JSON.parse(localStorage.getItem(draftKey) || '{}'); } catch {}
@@ -359,7 +402,7 @@ route('/new', async () => {
         try {
           const { request } = await api('/requests', { method: 'POST', body: { title: fd.get('title'), description: fd.get('description') } });
           try { localStorage.removeItem(draftKey); } catch {}
-          toast(request.status === 'queued' ? 'Submitted to the build queue' : 'Submitted for votes');
+          toast(request.status === 'queued' ? 'Shared! Claude will start on it soon.' : 'Shared! Now get people to vote 🗳️');
           go(`/requests/${request.id}`);
         } catch (e2) {
           err.textContent = e2.message;
@@ -367,22 +410,22 @@ route('/new', async () => {
         }
       },
     },
-    h('label', { class: 'field' }, 'Title', h('small', {}, 'One line people can vote on'), h('input', { type: 'text', name: 'title', required: true, minlength: 3, maxlength: 140, value: draft.title || '', placeholder: 'Dark mode for the dashboard' })),
+    h('label', { class: 'field' }, 'Give it a name', h('small', {}, 'Short and catchy, like a headline'), h('input', { type: 'text', name: 'title', required: true, minlength: 3, maxlength: 140, value: draft.title || '', placeholder: 'A dark mode for night owls' })),
     h(
       'label',
       { class: 'field' },
-      'What should it do?',
-      h('small', {}, 'Claude reads this to build it. Say who it is for, what done looks like, and anything it must not break.'),
-      h('textarea', { name: 'description', required: true, minlength: 10, maxlength: 10000, rows: 8 }, draft.description || ''),
+      'Tell us about it',
+      h('small', {}, 'What would you like to be able to do? Who is it for? Describe it like you would to a friend. Claude may ask you questions later.'),
+      h('textarea', { name: 'description', required: true, minlength: 10, maxlength: 10000, rows: 7, placeholder: 'I use the app late at night and the bright screen hurts my eyes. It would be great if…' }, draft.description || ''),
     ),
     err,
     submit,
   );
-  mount(shell({ title: 'New request', tab: 'vote', back: '/', fab: false }, h('div', { class: 'page-head' }, h('h1', {}, 'Suggest a feature')), form));
+  mount(shell({ title: 'New idea', tab: 'vote', back: '/', fab: false }, head('New idea', 'What do you wish it did?'), form));
   form.querySelector('input').focus();
 });
 
-// ---------------------------------------------------------------- views: board
+// ---------------------------------------------------------------- views: building (board)
 route('/board', async (_p, alive) => {
   const wrap = h('div');
   const load = async () => {
@@ -397,33 +440,33 @@ route('/board', async (_p, alive) => {
       laneIds.map((id) => {
         const rep = reported.get(id);
         const r = byLane.get(id) || (rep?.requestId ? b.working.find((x) => x.id === rep.requestId) : null);
-        const st = b.orchestrator === 'offline' ? 'offline' : r || rep?.state === 'working' ? 'working' : 'idle';
+        const st = b.orchestrator === 'offline' ? 'offline' : r ? 'working' : 'idle';
+        const cls = `card lane ${st} ${id === 'integration' ? 'integration' : ''}`;
         const inner = [
-          h('div', { class: 'h' }, id === 'integration' ? 'Integration' : `Lane ${id}`, h('span', { class: 's', 'aria-label': st })),
-          r ? h('div', { class: 'w' }, r.title) : h('div', { class: 'w idle' }, st === 'offline' ? 'Offline' : rep?.detail || 'Idle'),
+          h('div', { class: 'h' }, id === 'integration' ? '✨ Final check' : `🛠️ Builder ${id}`, h('span', { class: 's', 'aria-label': st })),
+          r ? h('div', { class: 'w' }, r.title) : h('div', { class: 'w idle' }, st === 'offline' ? 'Taking a break' : id === 'integration' ? 'Nothing to check right now' : 'Free'),
         ];
-        return r ? h('a', { class: `card lane ${st} ${id === 'integration' ? 'integration' : ''}`, href: `#/requests/${r.id}` }, inner) : h('div', { class: `card lane ${st} ${id === 'integration' ? 'integration' : ''}` }, inner);
+        return r ? h('a', { class: cls, href: `#/requests/${r.id}` }, inner) : h('div', { class: cls }, inner);
       }),
     );
     const waiting = b.working.filter((r) => r.status === 'needs_info' || (r.status === 'integrating' && r.lane !== 'integration'));
-    fill(wrap, 
+    fill(wrap,
       b.orchestrator !== 'online'
-        ? h('div', { class: 'callout' }, h('strong', {}, b.orchestrator === 'offline' ? 'The builder is offline' : 'Builder status unknown'), h('p', { class: 'small' }, 'Approved requests stay queued and will be picked up when it reconnects.'))
+        ? h('div', { class: 'callout quiet' }, h('strong', {}, '😴 The builders are taking a break'), h('p', { class: 'small muted' }, 'Ideas stay in line and they will pick them up as soon as they are back.'))
         : null,
       lanes,
-      waiting.length ? h('div', { class: 'section-h' }, h('h2', {}, 'Waiting')) : null,
+      waiting.length ? h('div', { class: 'section-h' }, h('h2', {}, 'Waiting on something')) : null,
       waiting.length ? h('div', { class: 'list' }, waiting.map((r) => requestCard(r, { showVotes: false }))) : null,
-      h('div', { class: 'section-h' }, h('h2', {}, 'Up next'), h('span', { class: 'muted small' }, `${b.queue.length} queued`)),
+      h('div', { class: 'section-h' }, h('h2', {}, 'Up next'), h('span', { class: 'muted small' }, b.queue.length === 1 ? '1 in line' : `${b.queue.length} in line`)),
       b.queue.length
         ? h('div', { class: 'list' }, b.queue.map((r, i) => requestCard(r, { prefix: h('div', { class: 'qpos' }, i + 1) })))
-        : empty('The queue is empty', 'Approved requests show up here.'),
+        : empty('🧘', 'Nothing in line', 'Ideas with enough votes show up here.'),
     );
-    applyStyles(wrap);
   };
   await load();
   if (!alive()) return;
   currentRefresh = load;
-  mount(shell({ title: 'Build', tab: 'board' }, h('div', { class: 'page-head' }, h('h1', {}, 'Build board'), h('p', {}, 'Four lanes build in parallel. The integration lane tests and merges.')), wrap));
+  mount(shell({ tab: 'board' }, head('Live', 'Being built right now', 'Claude works on up to four ideas at once, and every one gets a final check before it goes live.'), wrap));
 });
 
 // ---------------------------------------------------------------- views: mine
@@ -434,30 +477,33 @@ route('/mine', async (_p, alive) => {
     if (!alive()) return;
     const ask = requests.filter((r) => r.status === 'needs_info');
     const rest = requests.filter((r) => r.status !== 'needs_info');
-    fill(listEl, 
-      ...ask.map((r) =>
-        h('a', { class: 'callout', href: `#/requests/${r.id}` }, h('strong', {}, 'Claude has a question'), h('span', {}, r.title), h('span', { class: 'small' }, 'Tap to answer')),
-      ),
-      ...(rest.length || ask.length ? rest.map((r) => applyStyles(requestCard(r, { onChange: load }))) : [empty('You have not requested anything yet')]),
+    fill(listEl,
+      ...ask.map((r) => h('a', { class: 'callout', href: `#/requests/${r.id}` }, h('strong', {}, '🙋 Claude has a question for you'), h('span', {}, r.title), h('span', { class: 'small' }, 'Tap to answer →'))),
+      ...(rest.length || ask.length ? rest.map((r) => requestCard(r, { onChange: load })) : [empty('✏️', 'You have not shared any ideas yet', 'Tap New idea to share your first one.')]),
     );
   };
   await load();
   if (!alive()) return;
   currentRefresh = load;
-  mount(shell({ title: 'Mine', tab: 'mine' }, h('div', { class: 'page-head' }, h('h1', {}, 'My requests')), listEl));
+  mount(shell({ tab: 'mine' }, head('Mine', 'My ideas'), listEl));
 });
 
 // ---------------------------------------------------------------- views: detail
+const celebrated = new Set();
 route('/requests/:id', async ({ id }, alive) => {
   const wrap = h('div', { class: 'detail' });
   let draft = '';
   const load = async () => {
     const focused = document.activeElement?.tagName === 'TEXTAREA';
     if (focused) return; // don't yank the composer out from under someone typing
-    const { request: r, messages, can } = await api(`/requests/${id}`);
+    const { request: r, messages, can, admin } = await api(`/requests/${id}`);
     if (!alive()) return;
     state.unread = (await api('/me')).unread ?? state.unread;
     updateBell();
+    if (r.status === 'done' && !celebrated.has(r.id)) {
+      celebrated.add(r.id);
+      setTimeout(confetti, 250);
+    }
 
     const act = (label, path, cls = 'ghost', confirmText) =>
       h('button', {
@@ -466,6 +512,7 @@ route('/requests/:id', async ({ id }, alive) => {
           if (confirmText && !confirm(confirmText)) return;
           try {
             await api(`/requests/${r.id}/${path}`, { method: 'POST', body: {} });
+            if (path === 'approve') confetti();
             load();
           } catch (e) {
             toast(e.message);
@@ -473,17 +520,12 @@ route('/requests/:id', async ({ id }, alive) => {
         },
       }, label);
 
-    const facts = h(
-      'dl',
-      { class: 'facts' },
-      h('dt', {}, 'Status'), h('dd', {}, pill(r.status)),
-      h('dt', {}, 'By'), h('dd', {}, r.mine ? 'You' : r.submitter),
-      r.queuePosition ? [h('dt', {}, 'Queue'), h('dd', {}, `#${r.queuePosition}`)] : null,
-      r.lane ? [h('dt', {}, 'Lane'), h('dd', {}, r.lane === 'integration' ? 'Integration' : r.lane)] : null,
-      r.branch ? [h('dt', {}, 'Branch'), h('dd', {}, h('code', {}, r.branch))] : null,
-      r.commit ? [h('dt', {}, 'Commit'), h('dd', {}, r.commitUrl ? h('a', { href: r.commitUrl, target: '_blank', rel: 'noopener' }, h('code', {}, r.commit.slice(0, 10))) : h('code', {}, r.commit.slice(0, 10)))] : null,
-      h('dt', {}, 'Votes'), h('dd', {}, `${r.upvotes} for · ${r.downvotes} against${r.consensus ? ` · ${r.consensus}` : ''}`),
-    );
+    const where =
+      r.status === 'queued' && r.queuePosition ? `Number ${r.queuePosition} in line`
+      : r.status === 'in_progress' ? 'Claude is building this right now'
+      : r.status === 'integrating' ? 'Built! Getting a final check before it goes live'
+      : r.status === 'proposed' ? r.consensus || 'Waiting on votes'
+      : null;
 
     const timeline = h(
       'div',
@@ -491,8 +533,8 @@ route('/requests/:id', async ({ id }, alive) => {
       messages.map((m) =>
         h(
           'div',
-          { class: `msg ${m.author} ${m.kind}` },
-          m.author !== 'system' ? h('div', { class: 'who' }, m.author === 'claude' ? (m.kind === 'question' ? 'Claude asks' : 'Claude') : m.username || 'You', ' · ', ago(m.createdAt)) : null,
+          { class: `msg ${m.author} ${m.kind} ${m.adminOnly ? 'admin' : ''}` },
+          m.author !== 'system' ? h('div', { class: 'who' }, m.adminOnly ? '🔧 Admin only · ' : '', m.author === 'claude' ? (m.kind === 'question' ? 'Claude asks' : 'Claude') : m.username || 'You', ' · ', ago(m.createdAt)) : null,
           h('div', { class: 'bubble' }, m.body),
         ),
       ),
@@ -500,12 +542,12 @@ route('/requests/:id', async ({ id }, alive) => {
 
     let composer = null;
     if (can.reply || can.comment) {
-      const ta = h('textarea', { rows: 2, placeholder: can.reply ? 'Answer Claude…' : 'Add a comment…', 'aria-label': can.reply ? 'Your answer' : 'Comment', oninput: (e) => (draft = e.target.value) }, draft);
-      const send = h('button', { class: 'btn sm', type: 'submit' }, can.reply ? 'Send answer' : 'Comment');
+      const ta = h('textarea', { rows: 2, placeholder: can.reply ? 'Type your answer…' : 'Add a note…', 'aria-label': can.reply ? 'Your answer' : 'Note', oninput: (e) => (draft = e.target.value) }, draft);
+      const send = h('button', { class: `btn sm ${can.reply ? 'hot' : ''}`, type: 'submit' }, can.reply ? 'Send' : 'Add note');
       composer = h(
         'form',
         {
-          class: 'composer',
+          class: `composer ${can.reply ? 'sticky' : ''}`,
           onsubmit: async (e) => {
             e.preventDefault();
             if (!ta.value.trim()) return;
@@ -514,7 +556,7 @@ route('/requests/:id', async ({ id }, alive) => {
               await api(`/requests/${r.id}/${can.reply ? 'reply' : 'comment'}`, { method: 'POST', body: { body: ta.value } });
               draft = '';
               ta.blur();
-              if (can.reply) toast('Sent. Claude will pick this back up next.');
+              if (can.reply) toast('Thanks! Claude will pick it back up 🙌');
               load();
             } catch (e2) {
               toast(e2.message);
@@ -523,36 +565,52 @@ route('/requests/:id', async ({ id }, alive) => {
           },
         },
         ta,
-        h('div', { class: 'row' }, h('span', { class: 'hint' }, can.reply ? 'Your answer resumes the build' : 'Visible to admins and Claude'), send),
+        h('div', { class: 'row' }, h('span', { class: 'hint' }, can.reply ? 'Claude keeps going once you answer' : 'Only you, admins and Claude see notes'), send),
       );
     }
 
-    fill(wrap, 
-      h('div', { class: 'card stack' },
-        h('div', { class: 'req', style: r.canVote ? null : 'grid-template-columns:1fr' }, r.canVote ? voteControl(r, load) : null, h('div', { class: 'body' }, h('h2', {}, r.title), consensusBar(r))),
-        h('p', { class: 'desc' }, r.description),
-        facts,
+    const adminBox = admin
+      ? h('details', { class: 'card adminbox' },
+          h('summary', {}, '🔧 Admin details'),
+          h('dl', { class: 'facts' },
+            admin.branch ? [h('dt', {}, 'Branch'), h('dd', {}, h('code', {}, admin.branch))] : null,
+            admin.lane ? [h('dt', {}, 'Lane'), h('dd', {}, admin.lane)] : null,
+            admin.commit ? [h('dt', {}, 'Commit'), h('dd', {}, admin.commitUrl ? h('a', { href: admin.commitUrl, target: '_blank', rel: 'noopener' }, h('code', {}, admin.commit.slice(0, 10))) : h('code', {}, admin.commit.slice(0, 10)))] : null,
+            admin.failureReason ? [h('dt', {}, 'Problem'), h('dd', {}, admin.failureReason)] : null,
+            [h('dt', {}, 'Votes'), h('dd', {}, `${r.upvotes} yes · ${r.downvotes} no`)],
+          ))
+      : null;
+
+    fill(wrap,
+      h('div', { class: 'hero' },
+        h('div', { class: 'row' }, sticker(r, true), r.canVote ? voteControl(r, load) : null),
+        h('h1', {}, r.title),
+        h('div', { class: 'meta' }, pill(r.status), h('span', {}, `${r.mine ? 'Your idea' : `${r.submitter}'s idea`} · ${ago(r.createdAt)}`)),
+        consensusBar(r),
+        where ? h('p', { class: 'muted small' }, where) : null,
       ),
-      r.status === 'needs_info' && r.mine ? h('div', { class: 'callout' }, h('strong', {}, 'Claude needs your answer to keep going'), h('p', { class: 'small' }, 'Reply below. Your request goes to the front of the queue as soon as you answer.')) : null,
-      r.summary ? h('div', { class: 'callout info' }, h('strong', {}, 'What shipped'), h('p', {}, r.summary)) : null,
+      h('p', { class: 'desc' }, r.description),
+      r.status === 'needs_info' && r.mine ? h('div', { class: 'callout' }, h('strong', {}, '🙋 Claude needs your help to keep going'), h('p', { class: 'small' }, 'Answer the question below. Your idea jumps to the front of the line as soon as you do.')) : null,
+      r.summary ? h('div', { class: 'callout info' }, h('strong', {}, '🎉 What changed'), h('p', {}, r.summary)) : null,
+      r.status === 'failed' ? h('div', { class: 'callout quiet' }, h('strong', {}, '😵 Claude got stuck on this one'), h('p', { class: 'small muted' }, 'An admin has been told and can try again.')) : null,
       can.approve || can.reject || can.cancel || can.retry
         ? h('div', { class: 'actions' },
-            can.approve ? act('Approve and queue', 'approve', '') : null,
-            can.retry ? act('Retry', 'retry', '') : null,
-            can.reject ? act('Reject', 'reject', 'danger', 'Reject this request?') : null,
-            can.cancel ? act('Cancel request', 'cancel', 'danger', 'Cancel this request? Any work in progress is stopped.') : null)
+            can.approve ? act('✅ Build it', 'approve', 'hot') : null,
+            can.retry ? act('🔁 Try again', 'retry', '') : null,
+            can.reject ? act('Pass on this', 'reject', 'danger', 'Pass on this idea? It will not be built.') : null,
+            can.cancel ? act('Cancel', 'cancel', 'danger', 'Cancel this idea? If Claude is working on it, it will stop.') : null)
         : null,
-      h('div', { class: 'section-h' }, h('h2', {}, 'Activity')),
+      adminBox,
+      h('div', { class: 'section-h' }, h('h2', {}, 'What’s happened')),
       timeline,
       composer,
     );
-    applyStyles(wrap);
     if (r.status === 'needs_info' && can.reply) wrap.querySelector('.composer textarea')?.scrollIntoView({ block: 'center' });
   };
   await load();
   if (!alive()) return;
   currentRefresh = load;
-  mount(shell({ title: `Request #${id}`, tab: null, back: '/', fab: false }, wrap));
+  mount(shell({ title: 'Idea', tab: null, back: '/', fab: false }, wrap));
 });
 
 // ---------------------------------------------------------------- views: notifications
@@ -566,7 +624,7 @@ route('/notifications', async (_p, alive) => {
         ? notifications.map((n) =>
             h('a', { class: `card notif ${n.read_at ? '' : 'unread'}`, href: n.request_id ? `#/requests/${n.request_id}` : '#/notifications' }, h('span', { class: 'u' }), h('div', {}, h('div', {}, n.body), h('div', { class: 'when' }, ago(n.created_at)))),
           )
-        : [empty('No notifications yet', 'You will hear here when Claude asks a question or ships something.')]),
+        : [empty('🔕', 'All quiet', 'You will hear here when Claude has a question or one of your ideas goes live.')]),
     );
   };
   await load();
@@ -580,8 +638,8 @@ route('/notifications', async (_p, alive) => {
       updateBell();
       load();
     },
-  }, 'Mark all read');
-  mount(shell({ title: 'Notifications', tab: null, back: '/' }, h('div', { class: 'page-head row-between' }, h('h1', {}, 'Notifications'), markAll), listEl));
+  }, 'Mark all seen');
+  mount(shell({ title: 'Updates', tab: null, back: '/', fab: false }, h('div', { class: 'page-head row-between' }, h('h1', {}, 'Updates'), markAll), listEl));
 });
 
 // ---------------------------------------------------------------- views: account
@@ -589,10 +647,10 @@ route('/account', async () => {
   const pushBox = h('div', { class: 'stack' });
   const renderPush = async () => {
     const supported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
-    if (!state.config?.pushPublicKey) return fill(pushBox, h('p', { class: 'muted small' }, 'Phone notifications are not set up on this server yet.'));
+    if (!state.config?.pushPublicKey) return fill(pushBox, h('p', { class: 'muted small' }, 'Phone alerts are not switched on for Stall yet.'));
     if (!supported) {
       return fill(pushBox, 
-        h('p', { class: 'muted small' }, isIos() && !isStandalone() ? 'On iPhone, add Stall to your Home Screen first, then open it from there to turn on notifications.' : 'This browser does not support notifications.'),
+        h('p', { class: 'muted small' }, isIos() && !isStandalone() ? 'On iPhone, add Stall to your Home Screen first (see above), then open it from there to turn on alerts.' : 'This browser can’t show alerts.'),
       );
     }
     const reg = await navigator.serviceWorker.ready;
@@ -605,13 +663,13 @@ route('/account', async () => {
           if (sub) {
             await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } });
             await sub.unsubscribe();
-            toast('Notifications off');
+            toast('Alerts off');
           } else {
             const perm = await Notification.requestPermission();
-            if (perm !== 'granted') throw new Error('Notifications were not allowed');
+            if (perm !== 'granted') throw new Error('Alerts were not allowed. You can change this in your phone settings.');
             const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(state.config.pushPublicKey) });
             await api('/push/subscribe', { method: 'POST', body: { subscription: s.toJSON() } });
-            toast('Notifications on');
+            toast('Alerts on 🔔');
           }
         } catch (e) {
           toast(e.message);
@@ -619,10 +677,10 @@ route('/account', async () => {
         renderPush();
       },
     }, sub ? 'Turn off' : 'Turn on');
-    fill(pushBox, h('div', { class: 'row-between' }, h('div', {}, h('strong', {}, 'Phone notifications'), h('p', { class: 'muted small' }, 'Questions from Claude and shipped features.')), btn));
+    fill(pushBox, h('div', { class: 'row-between' }, h('div', {}, h('strong', {}, '🔔 Phone alerts'), h('p', { class: 'muted small' }, 'Get a buzz when Claude has a question or your idea goes live.')), btn));
   };
 
-  const adminBox = state.user.isAdmin ? h('div', { class: 'card stack' }, h('h2', {}, 'People'), h('p', { class: 'muted small' }, 'Admins can approve requests without a vote.')) : null;
+  const adminBox = state.user.isAdmin ? h('div', { class: 'card stack' }, h('h2', {}, 'People'), h('p', { class: 'muted small' }, 'Admins can green-light ideas without waiting for votes.')) : null;
   if (adminBox) {
     const { users } = await api('/admin/users');
     for (const u of users) {
@@ -638,7 +696,7 @@ route('/account', async () => {
                 toast(e.message);
               }
             },
-          }, u.is_admin ? 'Admin ✓' : 'Make admin')),
+          }, u.is_admin ? '👑 Admin' : 'Make admin')),
       );
     }
   }
@@ -646,7 +704,7 @@ route('/account', async () => {
   mount(
     shell(
       { title: 'Account', tab: 'account', fab: false },
-      h('div', { class: 'page-head' }, h('h1', {}, state.user.username), h('p', {}, state.user.isAdmin ? 'Admin' : 'Member')),
+      head(state.user.isAdmin ? '👑 Admin' : '👋 Hi', state.user.username),
       h('div', { class: 'list' },
         installHint(true),
         h('div', { class: 'card' }, pushBox),
@@ -682,7 +740,7 @@ function installHint(always = false) {
   try { dismissed = localStorage.getItem('stall:install-dismissed') === '1'; } catch {}
   if (dismissed && !always) return null;
   const box = h('div', { class: 'card stack' });
-  const title = h('strong', {}, 'Put Stall on your phone');
+  const title = h('strong', {}, '📲 Put Stall on your phone');
   if (isIos()) {
     box.append(
       title,
@@ -692,10 +750,10 @@ function installHint(always = false) {
         h('li', {}, 'Choose ', h('strong', {}, 'Add to Home Screen'), ', then Add.')),
     );
   } else if (state.installPrompt) {
-    box.append(title, h('p', { class: 'small muted' }, 'Install it like an app, with its own icon and notifications.'),
-      h('button', { class: 'btn sm', onclick: async () => { state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; render(); } }, 'Install app'));
+    box.append(title, h('p', { class: 'small muted' }, 'It works just like an app, with its own icon and alerts.'),
+      h('button', { class: 'btn sm hot', onclick: async () => { state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; render(); } }, 'Install app'));
   } else {
-    box.append(title, h('p', { class: 'small muted' }, 'In your browser menu, choose Install app or Add to Home screen.'));
+    box.append(title, h('p', { class: 'small muted' }, 'Open your browser menu and choose Install app or Add to Home screen.'));
   }
   if (!always)
     box.append(h('button', { class: 'btn sm ghost', type: 'button', onclick: () => { try { localStorage.setItem('stall:install-dismissed', '1'); } catch {} box.remove(); } }, 'Not now'));

@@ -20,7 +20,10 @@ export function loadAppConfig() {
   const cfg = {
     port: int('PORT', 3000),
     dbPath: process.env.STALL_DB ?? 'data/stall.db',
-    publicUrl: process.env.STALL_PUBLIC_URL ?? `http://localhost:${int('PORT', 3000)}`,
+    /** Hosted database (Turso). When set, STALL_DB is ignored. */
+    tursoUrl: process.env.TURSO_DATABASE_URL ?? '',
+    tursoToken: process.env.TURSO_AUTH_TOKEN ?? '',
+    publicUrl: process.env.STALL_PUBLIC_URL ?? process.env.RENDER_EXTERNAL_URL ?? `http://localhost:${int('PORT', 3000)}`,
     cookieSecure: process.env.COOKIE_SECURE === 'true',
     allowSignup: process.env.ALLOW_SIGNUP !== 'false',
     /** Bearer token the orchestrator uses to call /api/orch/*. */

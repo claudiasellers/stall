@@ -2,7 +2,7 @@
 
 Stall is a feature-request app. People sign in, suggest features, and vote on them. Once a request reaches consensus, or an admin approves it, it enters a build queue. A Claude orchestrator picks it up, builds it in one of **four parallel worker lanes** (each in its own git worktree), and hands the finished branch to a **fifth integration lane** that only merges, builds, tests, and publishes. Claude can stop and ask the submitter a question in the app, and the submitter's answer resumes the work. People get notified in the app, and on their phone if they turn notifications on, when Claude has a question and when their feature ships.
 
-The web app is an installable PWA: open it on a phone and use **Share → Add to Home Screen** (iPhone) or **Install app** (Android). Everything the web app does goes through a JSON API (`/api/v1`) that a native iOS app can use later without changes.
+The people using Stall don't need to be technical. Everything they see is in plain language, and branches, commits and build output are only shown to admins, behind an "Admin details" toggle. The web app is an installable PWA: open it on a phone and use **Share → Add to Home Screen** (iPhone) or **Install app** (Android). Everything the web app does goes through a JSON API (`/api/v1`) that a native iOS app can use later without changes.
 
 ```
 ┌──────────── Stall app (npm run app) ─────────────┐          ┌──────── Orchestrator (npm run orchestrator) ────────┐
@@ -18,9 +18,19 @@ The web app is an installable PWA: open it on a phone and use **Share → Add to
                                                               └─────────────────────────────────────────────────────┘
 ```
 
+## Put it online for free (Render + Turso)
+
+The web app runs on Render's free plan, and its data lives in a free Turso database. Render's free disk is wiped whenever the app restarts, so the data has to live somewhere else.
+
+1. **Database.** Sign in at [turso.tech](https://app.turso.tech) with GitHub and create a database named `stall`. Copy its URL (`libsql://…`), then create a token and copy that too.
+2. **App.** Click [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/claudiasellers/stall), sign in with GitHub, paste the two Turso values when asked, and press **Deploy**. `render.yaml` sets everything else, including the shared secrets. Web Push keys are created on first start and stored in the database.
+3. Open `https://<service>.onrender.com` and sign up. The first account becomes the admin.
+
+On the free plan the app sleeps after about 15 minutes with no visitors, and the first visit afterwards takes around 30 seconds. Ideas still queue up while the builder (orchestrator) is not running, and the Building tab shows the builders as taking a break. To start building, run the orchestrator somewhere with git and Claude access, such as your own computer (see below), and give it the app's `STALL_ORCH_TOKEN` and `STALL_WEBHOOK_SECRET` from the Render dashboard.
+
 ## Quick start (local, no Claude)
 
-Requires Node 22.18+ (TypeScript runs directly through Node's type stripping, so there is no build step) and git.
+Requires Node 22.18+ (TypeScript runs directly through Node's type stripping, so there is no build step) and git. Locally the app stores data in `data/stall.db`. Set `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` to use a hosted database instead.
 
 ```bash
 npm install
@@ -49,7 +59,7 @@ STALL_APP_URL=http://127.0.0.1:3000 TARGET_REPO=/tmp/target AGENT=mock npm run o
 2. **Configure.** Copy `.env.example` to `.env` and fill it in. The two services share `STALL_ORCH_TOKEN` (orchestrator → app calls) and `STALL_WEBHOOK_SECRET` (app → orchestrator webhook signatures). Set `ANTHROPIC_API_KEY` for the orchestrator, and set `BUILD_CMD`, `TEST_CMD` and `WORKTREE_SETUP_CMD` to whatever your product uses.
 3. **Run both processes** under a supervisor such as systemd, PM2 or a container platform: `node --env-file=.env --disable-warning=ExperimentalWarning app/src/server.ts` and the same for `orchestrator/src/index.ts`. They can run on different machines. The app only needs to reach `STALL_WEBHOOK_URL`, and the orchestrator only needs to reach `STALL_APP_URL`.
 4. **Serve the app over HTTPS** with `COOKIE_SECURE=true` (and `TRUST_PROXY=true` behind a proxy). Phones only offer install and notifications on HTTPS.
-5. **Phone notifications (optional):** run `npx web-push generate-vapid-keys` and set `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY`. On iPhone, notifications work once Stall is added to the Home Screen and opened from there (iOS 16.4+). Each person turns them on under Account.
+5. **Phone notifications:** these work out of the box, because the app generates Web Push keys on first start and keeps them in the database. To manage the keys yourself, set `VAPID_PUBLIC_KEY` and `VAPID_PRIVATE_KEY`. On iPhone, notifications only work once Stall is added to the Home Screen and opened from there (iOS 16.4+). Each person turns them on under the You tab.
 
 The orchestrator runs Claude with permission prompts bypassed, because nobody is there to answer them. Run it in a container or VM whose only credentials are for the target repo.
 

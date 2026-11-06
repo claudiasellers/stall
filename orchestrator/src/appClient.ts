@@ -41,14 +41,14 @@ export class AppClient {
   async claim(id: number, lane: string): Promise<boolean> {
     return (await this.call<{ claimed: boolean }>('POST', `/requests/${id}/claim`, { lane }, [409])).data.claimed;
   }
-  async progress(id: number, p: { status?: 'in_progress' | 'integrating'; lane?: string | null; branch?: string; note?: string }) {
+  async progress(id: number, p: { status?: 'in_progress' | 'integrating'; lane?: string | null; branch?: string; note?: string; detail?: string }) {
     await this.call('POST', `/requests/${id}/progress`, p);
   }
   async question(id: number, question: string) {
     await this.call('POST', `/requests/${id}/question`, { question });
   }
-  async requeue(id: number, reason: string) {
-    await this.call('POST', `/requests/${id}/requeue`, { reason });
+  async requeue(id: number, reason: string, detail?: string) {
+    await this.call('POST', `/requests/${id}/requeue`, { reason, detail });
   }
   async complete(id: number, p: { summary: string; commit: string; branch: string }) {
     await this.call('POST', `/requests/${id}/complete`, p);

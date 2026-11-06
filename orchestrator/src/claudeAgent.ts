@@ -23,7 +23,7 @@ export class ClaudeAgent implements Agent {
           'Ask the person who submitted this feature request a clarifying question. They answer in the Stall app, ' +
             'which can take hours, so after calling this you must end your turn immediately. You will be resumed with their answer. ' +
             'Ask at most one focused question, and only when the answer would materially change what you build.',
-          { question: z.string().min(5).max(2000).describe('One clear question, written for a non-engineer') },
+          { question: z.string().min(5).max(2000).describe('One short, friendly question in everyday language. The submitter is not technical: no jargon. Offering two or three options to pick from works well.') },
           async ({ question }) => {
             if (asked) return { content: [{ type: 'text', text: 'You already asked a question. End your turn now.' }], isError: true };
             await input.askSubmitter(question);
@@ -33,7 +33,7 @@ export class ClaudeAgent implements Agent {
         ),
         tool(
           'post_update',
-          'Post a short progress note (one sentence) to the request timeline the submitter sees. Use sparingly, for real milestones.',
+          'Post a short, friendly progress note (one sentence, no technical terms) to the timeline the submitter sees. Use sparingly, for real milestones.',
           { note: z.string().min(3).max(500) },
           async ({ note }) => {
             await input.postUpdate(note);

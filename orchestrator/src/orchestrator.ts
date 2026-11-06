@@ -73,7 +73,7 @@ export class Orchestrator {
     for (const job of this.store.byPhase('working')) {
       log('recover', `#${job.request_id} was mid-build; requeueing to resume`);
       try {
-        await this.app.requeue(job.request_id, 'The builder restarted. Resuming where it left off.');
+        await this.app.requeue(job.request_id, 'Claude took a short break and will pick this back up where it left off.');
       } catch (e) {
         log('recover', `#${job.request_id} requeue failed: ${(e as Error).message}`);
       }
@@ -162,7 +162,8 @@ export class Orchestrator {
         status: 'in_progress',
         lane: lane.id,
         branch: job.branch,
-        note: mode === 'fresh' ? `Started on branch ${job.branch}.` : undefined,
+        note: mode === 'answer' ? 'Thanks for answering! Claude is back on it.' : undefined,
+        detail: mode === 'fresh' ? `Started on branch ${job.branch} in builder ${lane.id}.` : undefined,
       });
 
       const detail = await this.app.detail(id);
@@ -198,7 +199,7 @@ export class Orchestrator {
 
       const summary = (result.text || `Implemented "${item.title}".`).slice(0, 3000);
       this.store.update(id, { phase: 'ready', lane: null, summary, rework_note: null });
-      await this.app.progress(id, { status: 'integrating', lane: null, note: 'Work is done on the branch. Waiting for the integration lane to build, test and merge it.' });
+      await this.app.progress(id, { status: 'integrating', lane: null, note: 'Claude finished building this! It is getting a final check before it goes live.', detail: `${ahead} commit(s) on ${job.branch}.` });
       L(`ready (${ahead} commit(s)${result.costUsd ? `, $${result.costUsd.toFixed(2)}` : ''})`);
       this.kickIntegration();
     } catch (e) {
@@ -255,7 +256,7 @@ export class Orchestrator {
     this.integration.detail = job.title;
     void this.heartbeat();
     try {
-      await this.app.progress(id, { status: 'integrating', lane: 'integration', note: 'Integration lane: merging onto the latest base and running checks.' });
+      await this.app.progress(id, { status: 'integrating', lane: 'integration', detail: `Integration lane: merging ${job.branch} onto the latest ${this.cfg.baseBranch} and running checks.` });
     } catch (e) {
       L(`app refused progress (${(e as Error).message}); dropping`);
       this.store.update(id, { phase: 'cancelled' });
@@ -366,7 +367,13 @@ export class Orchestrator {
     }
     log('integration', `#${id} sending back for rework (${kind}, ${count}/${this.cfg.maxRework})`);
     this.store.update(id, { phase: 'rework', rework_note: reason, rework_count: count });
-    await this.app.requeue(id, kind === 'conflict' ? `Integration found a merge conflict; sending it back to a lane to fix. ${reason}` : `Integration checks failed; sending it back to a lane to fix.`);
+    await this.app.requeue(
+      id,
+      kind === 'conflict'
+        ? 'The final check found that this clashes with another idea that just went live. Claude is smoothing it out.'
+        : 'The final check found a problem. Claude is fixing it before it goes live.',
+      reason,
+    );
     this.pump();
   }
 
@@ -425,8 +432,9 @@ You implement one feature request from the Stall app, unattended, in a dedicated
 - Commit your work in logical commits with clear messages. Anything uncommitted when you finish is committed for you.
 - The integration lane will run${cfg.buildCmd ? ` \`${cfg.buildCmd}\`` : ''}${cfg.buildCmd && cfg.testCmd ? ' and' : ''}${cfg.testCmd ? ` \`${cfg.testCmd}\`` : ''}${!cfg.buildCmd && !cfg.testCmd ? ' no automated checks' : ''}. Run the same checks yourself before you finish and add or update tests for what you build.
 - Follow the repository's own conventions (README, CLAUDE.md, existing code style).
+- The people who submit and vote on requests are NOT technical. Anything they see (questions, progress notes, your final summary) must be friendly everyday language: never mention code, files, branches, commits, tests, frameworks, APIs or other jargon.
 - If the request is ambiguous in a way that would change what you build, call the \`ask_submitter\` tool with one focused question written for a non-engineer, commit any work in progress, and end your turn immediately. Otherwise make sensible assumptions and mention them in your summary.
 - Use \`post_update\` sparingly for real milestones.
-- Your final message is shown to the submitter as "What shipped". Make it 2–4 plain-language sentences about what changed and any assumptions, no code.
+- Your final message is shown to the submitter as "What changed". Make it 2–4 warm, plain-language sentences about what they can now do and any choices you made for them. No technical terms.
 `.trim();
 }

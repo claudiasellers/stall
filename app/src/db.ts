@@ -1,8 +1,19 @@
-import { DatabaseSync } from 'node:sqlite';
+// SQLite through libsql: a local file in development, or a hosted Turso database
+// (free tier) when TURSO_DATABASE_URL is set, so data survives restarts on hosts
+// with throwaway disks such as Render's free plan.
+import Database from 'libsql';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-export type Db = DatabaseSync;
+type Params = (string | number | null | bigint | Uint8Array)[];
+export interface Db {
+  prepare(sql: string): {
+    run(...p: Params): { changes: number; lastInsertRowid: number | bigint };
+    get(...p: Params): unknown;
+    all(...p: Params): unknown[];
+  };
+  exec(sql: string): unknown;
+}
 
 const MIGRATIONS: string[] = [
   `
@@ -87,12 +98,25 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   );
   `,
+  `
+  -- Technical notes (test output, conflict lists) only admins see.
+  ALTER TABLE messages ADD COLUMN admin_only INTEGER NOT NULL DEFAULT 0;
+  `,
+  `
+  CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+  `,
 ];
 
-export function openDb(path: string): Db {
-  if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
-  const db = new DatabaseSync(path);
-  db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+export function openDb(path: string, remote?: { url: string; authToken?: string }): Db {
+  let db: Db;
+  if (remote?.url) {
+    db = new Database(remote.url, { authToken: remote.authToken } as ConstructorParameters<typeof Database>[1]) as unknown as Db;
+    db.exec('PRAGMA foreign_keys = ON;');
+  } else {
+    if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
+    db = new Database(path) as unknown as Db;
+    db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
+  }
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
   const row = db.prepare('SELECT version FROM schema_version').get() as { version: number } | undefined;
   let version = row?.version ?? 0;

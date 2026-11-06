@@ -154,9 +154,12 @@ assert.ok(askFile.includes('Orange, please'), 'answer reached the resumed lane')
 assert.ok(!files.includes(`features/req-${cancelMe.id}.md`), 'cancelled request was not merged');
 
 const brkDetail = await bob.call('GET', `/requests/${brk.id}`);
-assert.ok(brkDetail.messages.some((m: { body: string }) => m.body.includes('checks failed')), 'rework note on timeline');
+assert.ok(brkDetail.messages.some((m: { body: string }) => m.body.includes('final check found a problem')), 'rework note on timeline');
 const done = await alice.call('GET', `/requests/${plain.id}`);
-assert.match(done.request.commit, /^[0-9a-f]{40}$/);
+assert.match(done.admin.commit, /^[0-9a-f]{40}$/, 'admins see the commit');
+const bobView = await bob.call('GET', `/requests/${plain.id}`);
+assert.equal(bobView.admin, null, 'members never see technical details');
+assert.ok(!JSON.stringify(bobView).includes('stall/'), 'no branch names leak to members');
 const bobNotes = await bob.call('GET', '/notifications');
 assert.ok(bobNotes.notifications.some((n: { body: string }) => n.body.includes('you voted for')), 'voters notified');
 const board = await alice.call('GET', '/board');

@@ -1,6 +1,6 @@
 // Stall service worker: offline app shell + Web Push.
-const VERSION = 'stall-v1';
-const SHELL = ['/', '/index.html', '/app.js', '/style.css', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png', '/icons/apple-touch-icon.png'];
+const VERSION = 'stall-v2';
+const SHELL = ['/', '/index.html', '/app.js', '/style.css', '/fonts/bricolage-grotesque.woff2', '/fonts/inter.woff2', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png', '/icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

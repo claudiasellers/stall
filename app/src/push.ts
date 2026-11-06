@@ -9,9 +9,30 @@ export function pushEnabled(cfg: AppConfig) {
   return Boolean(cfg.vapidPublicKey && cfg.vapidPrivateKey);
 }
 
+/**
+ * Use VAPID keys from the environment, or create a pair once and keep it in the
+ * database, so phone alerts work on a fresh deploy with no setup.
+ */
+export function ensureVapidKeys(db: Db, cfg: AppConfig) {
+  if (pushEnabled(cfg) || process.env.DISABLE_PUSH === 'true') return;
+  const get = (k: string) => (db.prepare('SELECT value FROM settings WHERE key = ?').get(k) as { value: string } | undefined)?.value;
+  let pub = get('vapid_public');
+  let priv = get('vapid_private');
+  if (!pub || !priv) {
+    const keys = webpush.generateVAPIDKeys();
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('vapid_public', keys.publicKey);
+    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('vapid_private', keys.privateKey);
+    pub = keys.publicKey;
+    priv = keys.privateKey;
+    console.log('[stall] generated Web Push keys and saved them in the database');
+  }
+  cfg.vapidPublicKey = pub;
+  cfg.vapidPrivateKey = priv;
+}
+
 export function startPush(db: Db, cfg: AppConfig) {
   if (!pushEnabled(cfg)) {
-    console.log('[stall] Web Push disabled (set VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY to enable)');
+    console.log('[stall] Web Push disabled');
     return;
   }
   webpush.setVapidDetails(cfg.vapidSubject, cfg.vapidPublicKey, cfg.vapidPrivateKey);

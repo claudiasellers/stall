@@ -35,6 +35,7 @@ export type MessageRow = {
   username: string | null;
   kind: 'question' | 'reply' | 'note';
   body: string;
+  admin_only: number;
   created_at: string;
 };
 
@@ -143,7 +144,7 @@ export class Service {
       const id = Number(res.lastInsertRowid);
       // Submitters back their own idea.
       this.db.prepare('INSERT INTO votes (request_id, user_id, value) VALUES (?, ?, 1)').run(id, userId);
-      this.addMessage(id, 'system', 'note', 'Request submitted for votes.');
+      this.addMessage(id, 'system', 'note', 'Idea shared. Voting is open!');
       this.evaluateVotes(id);
       return id;
     });
@@ -184,17 +185,17 @@ export class Service {
       this.approve(
         requestId,
         this.cfg.voteMinUpvotes <= 0
-          ? 'Added to the build queue.'
-          : `Reached consensus (${r.upvotes} for, ${r.downvotes} against). Added to the build queue.`,
+          ? 'In line to be built.'
+          : `Enough people want this (${r.upvotes} yes, ${r.downvotes} no). It is in line to be built!`,
       );
     } else if (v === 'reject') {
       this.setStatus(requestId, 'rejected');
-      this.addMessage(requestId, 'system', 'note', `Voted down (${r.upvotes} for, ${r.downvotes} against).`);
-      this.notify(r.user_id, requestId, `“${r.title}” was voted down.`);
+      this.addMessage(requestId, 'system', 'note', `Most people voted no (${r.upvotes} yes, ${r.downvotes} no), so this one is on hold.`);
+      this.notify(r.user_id, requestId, `Your idea “${r.title}” didn’t get enough votes this time.`);
     }
   }
 
-  approve(requestId: number, note = 'Approved by an admin. Added to the build queue.') {
+  approve(requestId: number, note = 'An admin gave this the green light. It is in line to be built!') {
     tx(this.db, () => {
       const r = this.mustGet(requestId);
       if (r.status !== 'proposed' && r.status !== 'rejected') throw new HttpError(409, `Cannot approve a ${r.status} request`);
@@ -202,7 +203,7 @@ export class Service {
         .prepare(`UPDATE requests SET status = 'queued', approved_at = ?, updated_at = ? WHERE id = ?`)
         .run(now(), now(), requestId);
       this.addMessage(requestId, 'system', 'note', note);
-      this.notify(r.user_id, requestId, `“${r.title}” was approved and is in the build queue.`);
+      this.notify(r.user_id, requestId, `🎉 Your idea “${r.title}” is going to be built!`);
       const fresh = this.mustGet(requestId);
       this.enqueueWebhook({ type: 'request.queued', request: toQueueItem(fresh) });
     });
@@ -215,8 +216,8 @@ export class Service {
       const r = this.mustGet(requestId);
       if (r.status !== 'proposed' && r.status !== 'queued') throw new HttpError(409, `Cannot reject a ${r.status} request`);
       this.setStatus(requestId, 'rejected');
-      this.addMessage(requestId, 'system', 'note', 'Rejected by an admin.', actorId);
-      this.notify(r.user_id, requestId, `“${r.title}” was rejected.`);
+      this.addMessage(requestId, 'system', 'note', 'An admin decided to pass on this one for now.', actorId);
+      this.notify(r.user_id, requestId, `An admin passed on your idea “${r.title}” for now.`);
       if (r.status === 'queued') this.enqueueWebhook({ type: 'request.cancelled', requestId });
     });
     bus.emit('board');
@@ -290,7 +291,7 @@ export class Service {
       )
       .run(lane, now(), id);
     if (res.changes === 1) {
-      this.addMessage(id, 'system', 'note', `Picked up by ${laneLabel(lane)}.`);
+      this.addMessage(id, 'system', 'note', 'Claude started building this.');
       bus.emit('board');
       bus.emit(`request:${id}`);
       return true;
@@ -298,7 +299,7 @@ export class Service {
     return false;
   }
 
-  orchProgress(id: number, p: { status?: 'in_progress' | 'integrating'; lane?: string | null; branch?: string; note?: string }) {
+  orchProgress(id: number, p: { status?: 'in_progress' | 'integrating'; lane?: string | null; branch?: string; note?: string; detail?: string }) {
     tx(this.db, () => {
       const r = this.mustGet(id);
       if (['done', 'cancelled', 'rejected'].includes(r.status)) throw new HttpError(409, `Request is ${r.status}`);
@@ -309,6 +310,7 @@ export class Service {
         )
         .run(p.status ?? null, p.lane !== undefined ? 1 : 0, p.lane ?? null, p.branch ?? null, now(), id);
       if (p.note) this.addMessage(id, 'claude', 'note', p.note);
+      if (p.detail) this.addMessage(id, 'claude', 'note', p.detail, undefined, true);
     });
     bus.emit('board');
     bus.emit(`request:${id}`);
@@ -322,7 +324,7 @@ export class Service {
       if (r.status !== 'in_progress') throw new HttpError(409, `Cannot ask a question while ${r.status}`);
       const mid = this.addMessage(id, 'claude', 'question', question);
       this.db.prepare(`UPDATE requests SET status = 'needs_info', lane = NULL, updated_at = ? WHERE id = ?`).run(now(), id);
-      this.notify(r.user_id, id, `Claude has a question about “${r.title}”.`);
+      this.notify(r.user_id, id, `🙋 Claude has a quick question about “${r.title}”.`);
       return mid;
     });
     bus.emit('board');
@@ -331,7 +333,7 @@ export class Service {
   }
 
   /** Send a request back through the queue (e.g. integration rejected it). */
-  orchRequeue(id: number, reason: string) {
+  orchRequeue(id: number, reason: string, detail?: string) {
     tx(this.db, () => {
       const r = this.mustGet(id);
       if (!['in_progress', 'integrating'].includes(r.status)) throw new HttpError(409, `Cannot requeue a ${r.status} request`);
@@ -339,6 +341,7 @@ export class Service {
         .prepare(`UPDATE requests SET status = 'queued', priority = 1, lane = NULL, updated_at = ? WHERE id = ?`)
         .run(now(), id);
       this.addMessage(id, 'claude', 'note', reason);
+      if (detail) this.addMessage(id, 'claude', 'note', detail, undefined, true);
     });
     bus.emit('board');
     bus.emit(`request:${id}`);
@@ -354,13 +357,13 @@ export class Service {
            completed_at = ?, updated_at = ? WHERE id = ?`,
         )
         .run(p.summary, p.commit ?? null, p.branch ?? null, now(), now(), id);
-      this.addMessage(id, 'claude', 'note', `Shipped. ${p.summary}`);
-      this.notify(r.user_id, id, `“${r.title}” is done and merged.`);
+      this.addMessage(id, 'system', 'note', 'It’s live! 🎉');
+      this.notify(r.user_id, id, `🎉 Your idea “${r.title}” is live!`);
       // Everyone who upvoted it hears about it too.
       const voters = this.db
         .prepare('SELECT user_id FROM votes WHERE request_id = ? AND value = 1 AND user_id != ?')
         .all(id, r.user_id) as { user_id: number }[];
-      for (const v of voters) this.notify(v.user_id, id, `“${r.title}”, which you voted for, is done.`);
+      for (const v of voters) this.notify(v.user_id, id, `🎉 “${r.title}”, which you voted for, is live!`);
     });
     bus.emit('board');
     bus.emit(`request:${id}`);
@@ -373,8 +376,10 @@ export class Service {
       this.db
         .prepare(`UPDATE requests SET status = 'failed', lane = NULL, failure_reason = ?, completed_at = ?, updated_at = ? WHERE id = ?`)
         .run(reason, now(), now(), id);
-      this.addMessage(id, 'claude', 'note', `Could not complete: ${reason}`);
-      this.notify(r.user_id, id, `“${r.title}” could not be completed.`);
+      this.addMessage(id, 'system', 'note', 'Claude got stuck on this one. An admin has been told.');
+      this.addMessage(id, 'claude', 'note', reason, undefined, true);
+      this.notify(r.user_id, id, `Claude got stuck on “${r.title}”. An admin will take a look.`);
+      for (const a of this.admins()) if (a !== r.user_id) this.notify(a, id, `Claude got stuck on “${r.title}”. Open it to see what happened.`);
     });
     bus.emit('board');
     bus.emit(`request:${id}`);
@@ -388,11 +393,15 @@ export class Service {
       this.db
         .prepare(`UPDATE requests SET status = 'queued', priority = 1, failure_reason = NULL, completed_at = NULL, updated_at = ? WHERE id = ?`)
         .run(now(), id);
-      this.addMessage(id, 'system', 'note', 'Retried by an admin.');
+      this.addMessage(id, 'system', 'note', 'An admin asked Claude to try again.');
       this.enqueueWebhook({ type: 'request.queued', request: toQueueItem(this.mustGet(id)) });
     });
     bus.emit('board');
     bus.emit(`request:${id}`);
+  }
+
+  admins(): number[] {
+    return (this.db.prepare('SELECT id FROM users WHERE is_admin = 1').all() as { id: number }[]).map((r) => r.id);
   }
 
   // ---------- notifications ----------
@@ -434,10 +443,10 @@ export class Service {
     this.db.prepare('UPDATE requests SET status = ?, updated_at = ? WHERE id = ?').run(status, now(), id);
   }
 
-  addMessage(requestId: number, author: MessageRow['author'], kind: MessageRow['kind'], body: string, userId?: number): number {
+  addMessage(requestId: number, author: MessageRow['author'], kind: MessageRow['kind'], body: string, userId?: number, adminOnly = false): number {
     const res = this.db
-      .prepare('INSERT INTO messages (request_id, author, kind, body, user_id) VALUES (?, ?, ?, ?, ?)')
-      .run(requestId, author, kind, body, userId ?? null);
+      .prepare('INSERT INTO messages (request_id, author, kind, body, user_id, admin_only) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(requestId, author, kind, body, userId ?? null, adminOnly ? 1 : 0);
     this.db.prepare('UPDATE requests SET updated_at = ? WHERE id = ?').run(now(), requestId);
     return Number(res.lastInsertRowid);
   }
@@ -466,8 +475,9 @@ export function consensusProgress(r: { upvotes: number; downvotes: number }, cfg
   const total = r.upvotes + r.downvotes;
   const pct = total ? Math.round((100 * r.upvotes) / total) : 0;
   const parts = [];
-  if (need > 0) parts.push(`${need} more upvote${need === 1 ? '' : 's'}`);
-  if (total && r.upvotes / total < cfg.consensusRatio) parts.push(`${Math.round(cfg.consensusRatio * 100)}% yes (now ${pct}%)`);
+  void pct;
+  if (need > 0) parts.push(`${need} more ${need === 1 ? 'person' : 'people'} to want it`);
+  if (total && r.upvotes / total < cfg.consensusRatio) parts.push('more yes votes than no');
   return parts.length ? `Needs ${parts.join(' and ')}` : '';
 }
 

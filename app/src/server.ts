@@ -10,7 +10,7 @@ import {
   checkCsrf, rateLimiter, readCookie, COOKIE,
 } from './auth.ts';
 import { startOutbox } from './outbox.ts';
-import { startPush, pushEnabled, saveSubscription, removeSubscription } from './push.ts';
+import { startPush, pushEnabled, saveSubscription, removeSubscription, ensureVapidKeys } from './push.ts';
 import { ACTIVE_STATUSES, type RequestStatus } from '../../shared/types.ts';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
@@ -69,16 +69,16 @@ export function createApp(db: Db, cfg: AppConfig) {
     res.status(ok ? 200 : 409).json({ claimed: ok });
   });
   orch.post('/requests/:id/progress', (req, res) => {
-    const { status, lane, branch, note } = req.body ?? {};
+    const { status, lane, branch, note, detail } = req.body ?? {};
     if (status !== undefined && status !== 'in_progress' && status !== 'integrating') throw new HttpError(400, 'Bad status');
-    svc.orchProgress(id(req), { status, lane, branch, note });
+    svc.orchProgress(id(req), { status, lane, branch, note, detail });
     res.json({ ok: true });
   });
   orch.post('/requests/:id/question', (req, res) => {
     res.json({ messageId: svc.orchQuestion(id(req), str(req.body.question, 'question')) });
   });
   orch.post('/requests/:id/requeue', (req, res) => {
-    svc.orchRequeue(id(req), str(req.body.reason, 'reason'));
+    svc.orchRequeue(id(req), str(req.body.reason, 'reason'), typeof req.body.detail === 'string' ? req.body.detail : undefined);
     res.json({ ok: true });
   });
   orch.post('/requests/:id/complete', (req, res) => {
@@ -150,12 +150,8 @@ export function createApp(db: Db, cfg: AppConfig) {
     status: r.status,
     submitter: r.username,
     mine: r.user_id === viewerId,
-    lane: r.lane,
-    branch: r.branch,
-    commit: r.commit_sha,
-    commitUrl: r.commit_sha && cfg.commitUrlTemplate ? cfg.commitUrlTemplate.replace('{sha}', r.commit_sha) : null,
+    lane: r.lane, // builder slot number, shown as "Builder N"
     summary: r.summary,
-    failureReason: r.failure_reason,
     score: r.score,
     upvotes: r.upvotes,
     downvotes: r.downvotes,
@@ -200,9 +196,22 @@ export function createApp(db: Db, cfg: AppConfig) {
     svc.markRead(u.id, r.id);
     res.json({
       request: { ...view(r, u.id, svc.myVote(r.id, u.id)), queuePosition: svc.queuePosition(r.id) },
-      messages: svc.messages(r.id).map((m) => ({
-        id: m.id, author: m.author, username: m.username, kind: m.kind, body: m.body, createdAt: m.created_at,
-      })),
+      messages: svc
+        .messages(r.id)
+        .filter((m) => !m.admin_only || u.is_admin)
+        .map((m) => ({
+          id: m.id, author: m.author, username: m.username, kind: m.kind, body: m.body, adminOnly: !!m.admin_only, createdAt: m.created_at,
+        })),
+      // Technical details are for admins only; regular members never see branches or commits.
+      admin: u.is_admin
+        ? {
+            lane: r.lane,
+            branch: r.branch,
+            commit: r.commit_sha,
+            commitUrl: r.commit_sha && cfg.commitUrlTemplate ? cfg.commitUrlTemplate.replace('{sha}', r.commit_sha) : null,
+            failureReason: r.failure_reason,
+          }
+        : null,
       can: {
         reply: r.user_id === u.id && r.status === 'needs_info',
         comment: r.user_id === u.id || !!u.is_admin,
@@ -242,7 +251,7 @@ export function createApp(db: Db, cfg: AppConfig) {
     res.json({ ok: true });
   });
   api.post('/requests/:id/approve', requireAdmin, (req, res) => {
-    svc.approve(id(req), `Approved by ${req.user!.username} (admin). Added to the build queue.`);
+    svc.approve(id(req), `${req.user!.username} gave this the green light. It is in line to be built!`);
     res.json({ ok: true });
   });
   api.post('/requests/:id/reject', requireAdmin, (req, res) => {
@@ -370,7 +379,9 @@ function str(v: unknown, name: string): string {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const cfg = loadAppConfig();
-  const db = openDb(cfg.dbPath);
+  const db = openDb(cfg.dbPath, cfg.tursoUrl ? { url: cfg.tursoUrl, authToken: cfg.tursoToken } : undefined);
+  console.log(`[stall] database: ${cfg.tursoUrl ? 'Turso (hosted)' : cfg.dbPath}`);
+  ensureVapidKeys(db, cfg);
   const { app } = createApp(db, cfg);
   startOutbox(db, cfg);
   startPush(db, cfg);
