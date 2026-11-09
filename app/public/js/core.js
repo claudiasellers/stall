@@ -333,7 +333,7 @@ function b64ToBytes(b64) {
 function connectEvents() {
   state.events?.close();
   if (!state.user || !('EventSource' in window)) return;
-  const es = new EventSource('/api/v1/events');
+  const es = new EventSource('/api/v1/live');
   es.addEventListener('notification', (e) => {
     const d = JSON.parse(e.data);
     state.unread = d.unread;

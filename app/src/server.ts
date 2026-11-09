@@ -423,7 +423,7 @@ export function createApp(db: Db, cfg: AppConfig) {
   });
 
   // Server-sent events: live notifications and refresh hints.
-  api.get('/events', (req, res) => {
+  api.get('/live', (req, res) => {
     const u = req.user!;
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
