@@ -796,7 +796,7 @@ export class EventsService {
       regrets: count('posts', `AND kind = 'regret' AND (expires_at IS NULL OR expires_at > '${now()}')`),
       irishGoodbyesPosts: count('posts', `AND kind = 'irish_goodbye'`),
       irishGoodbyes: count('irish_goodbyes') ?? null,
-      tab: count('tab_expenses', 'AND deleted_at IS NULL'),
+      tab: count('tab_expenses'),
       checkins: count('night_checkins'),
     };
   }
