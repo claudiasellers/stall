@@ -20,7 +20,7 @@ export const migrations = [
     term TEXT NOT NULL,
     origin TEXT NOT NULL,
     event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
-    author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,  -- NULL once anonymized
     canon_since TEXT NOT NULL,               -- YYYY-MM-DD, house calendar
     created_at TEXT NOT NULL
   );
@@ -36,7 +36,7 @@ export const migrations = [
     reason TEXT NOT NULL,
     -- for places: which member is banned there (NULL = the whole group)
     member_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,  -- NULL once anonymized
     since TEXT NOT NULL,                     -- YYYY-MM-DD
     created_at TEXT NOT NULL
   );
@@ -46,7 +46,7 @@ export const migrations = [
 
   CREATE TABLE prophecies (
     id INTEGER PRIMARY KEY,
-    author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,  -- NULL once anonymized
     body TEXT NOT NULL,
     reveal_at TEXT NOT NULL,
     -- NULL until the group calls it after reveal_at: 1 came true, 0 did not
@@ -60,7 +60,7 @@ export const migrations = [
 
   CREATE TABLE hot_takes (
     id INTEGER PRIMARY KEY,
-    author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    author_id INTEGER REFERENCES users(id) ON DELETE SET NULL,  -- NULL once anonymized
     body TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
@@ -69,8 +69,8 @@ export const migrations = [
 
   CREATE TABLE court_cases (
     id INTEGER PRIMARY KEY,
-    plaintiff_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    defendant_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    plaintiff_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    defendant_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
     charge TEXT NOT NULL,
     sentence TEXT NOT NULL,
@@ -78,6 +78,8 @@ export const migrations = [
     rebuttal_at TEXT,
     closes_at TEXT NOT NULL,
     dismissed_at TEXT,
+    -- frozen at close so later membership changes can't rewrite the record
+    verdict TEXT CHECK (verdict IN ('guilty','not_guilty')),
     created_at TEXT NOT NULL
   );
   CREATE INDEX court_closes ON court_cases(closes_at);
@@ -122,6 +124,8 @@ export const SUPERLATIVES = [
 
 const COURT_HOURS = 24;
 const nameSql = (a: string) => `COALESCE(NULLIF(${a}.display_name, ''), ${a}.username)`;
+/** For nullable authorship: anonymized rows read as "a former member". */
+const nameOr = (a: string) => `COALESCE(NULLIF(${a}.display_name, ''), ${a}.username, 'a former member')`;
 const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 function text(v: unknown, max: number, name: string, required = true): string {
@@ -163,7 +167,8 @@ export class LoreService {
   isMember(id: number) {
     return !!this.db.prepare('SELECT 1 FROM users WHERE id = ? AND removed_at IS NULL').get(id);
   }
-  name(id: number) {
+  name(id: number | null) {
+    if (id == null) return 'a former member';
     return (this.db.prepare(`SELECT ${nameSql('u')} AS n FROM users u WHERE u.id = ?`).get(id) as { n: string } | undefined)?.n ?? 'Someone';
   }
   eventOrNull(v: unknown): number | null {
@@ -208,10 +213,21 @@ export class LoreService {
   quorum() {
     return Math.max(2, Math.ceil(this.memberCount() * 0.3));
   }
-  verdict(c: { closes_at: string; dismissed_at: string | null }, t: { yes: number; no: number }) {
+  verdict(c: { closes_at: string; dismissed_at: string | null; verdict?: string | null }, t: { yes: number; no: number }) {
     if (c.dismissed_at) return 'dismissed';
+    if (c.verdict) return c.verdict as 'guilty' | 'not_guilty';
     if (now() < c.closes_at) return 'open';
     return t.yes > t.no && t.yes >= this.quorum() ? 'guilty' : 'not_guilty';
+  }
+  /** Freeze the verdict of every case that has closed, using the quorum as of now (close time or first read after). */
+  settleClosed() {
+    const due = this.db.prepare('SELECT * FROM court_cases WHERE verdict IS NULL AND dismissed_at IS NULL AND closes_at <= ?').all(now()) as CaseRow[];
+    if (!due.length) return;
+    const t = this.tallies('court', due.map((c) => c.id), -1);
+    const upd = this.db.prepare('UPDATE court_cases SET verdict = ? WHERE id = ? AND verdict IS NULL');
+    tx(this.db, () => {
+      for (const c of due) upd.run(this.verdict(c, t.get(c.id) ?? { yes: 0, no: 0 }), c.id);
+    });
   }
   fileCase(v: Viewer, b: Record<string, unknown>) {
     const defendant = pid(b.defendantId);
@@ -261,14 +277,15 @@ export class LoreService {
     this.changed();
   }
   cases(v: Viewer, before?: string, defendantId?: number) {
+    this.settleClosed();
     const where = ['1=1'];
     const p: (string | number)[] = [];
     if (before) { where.push('c.created_at < ?'); p.push(before); }
     if (defendantId) { where.push('c.defendant_id = ?'); p.push(defendantId); }
     const rows = this.db
       .prepare(
-        `SELECT c.*, ${nameSql('pl')} AS plaintiff_name, pl.emoji AS plaintiff_emoji, ${nameSql('d')} AS defendant_name, d.emoji AS defendant_emoji, e.title AS event_title
-         FROM court_cases c JOIN users pl ON pl.id = c.plaintiff_id JOIN users d ON d.id = c.defendant_id LEFT JOIN events e ON e.id = c.event_id
+        `SELECT c.*, ${nameOr('pl')} AS plaintiff_name, pl.emoji AS plaintiff_emoji, ${nameOr('d')} AS defendant_name, d.emoji AS defendant_emoji, e.title AS event_title
+         FROM court_cases c LEFT JOIN users pl ON pl.id = c.plaintiff_id LEFT JOIN users d ON d.id = c.defendant_id LEFT JOIN events e ON e.id = c.event_id
          WHERE ${where.join(' AND ')} ORDER BY c.created_at DESC LIMIT 30`,
       )
       .all(...p) as (CaseRow & { plaintiff_name: string; plaintiff_emoji: string | null; defendant_name: string; defendant_emoji: string | null; event_title: string | null })[];
@@ -294,6 +311,7 @@ export class LoreService {
   }
   /** Permanent record: guilty verdicts per member (for profiles and Wrapped). */
   record(userId: number) {
+    this.settleClosed();
     const rows = this.db.prepare('SELECT * FROM court_cases WHERE defendant_id = ? AND dismissed_at IS NULL AND closes_at <= ?').all(userId, now()) as CaseRow[];
     const t = this.tallies('court', rows.map((r) => r.id), -1);
     const guilty = rows.filter((r) => this.verdict(r, t.get(r.id) ?? { yes: 0, no: 0 }) === 'guilty');
@@ -309,10 +327,10 @@ export class LoreService {
   takes(v: Viewer, before?: string) {
     const rows = this.db
       .prepare(
-        `SELECT h.*, ${nameSql('u')} AS author_name, u.emoji AS author_emoji FROM hot_takes h JOIN users u ON u.id = h.author_id
+        `SELECT h.*, ${nameOr('u')} AS author_name, u.emoji AS author_emoji FROM hot_takes h LEFT JOIN users u ON u.id = h.author_id
          ${before ? 'WHERE h.created_at < ?' : ''} ORDER BY h.created_at DESC LIMIT 30`,
       )
-      .all(...(before ? [before] : [])) as { id: number; author_id: number; body: string; created_at: string; author_name: string; author_emoji: string | null }[];
+      .all(...(before ? [before] : [])) as { id: number; author_id: number | null; body: string; created_at: string; author_name: string; author_emoji: string | null }[];
     const t = this.tallies('hot_take', rows.map((r) => r.id), v.id);
     return rows.map((r) => {
       const x = t.get(r.id) ?? { yes: 0, no: 0, mine: 0 };
@@ -325,7 +343,7 @@ export class LoreService {
     this.changed();
   }
   deleteTake(v: Viewer, id: number) {
-    const r = this.db.prepare('SELECT author_id FROM hot_takes WHERE id = ?').get(id) as { author_id: number } | undefined;
+    const r = this.db.prepare('SELECT author_id FROM hot_takes WHERE id = ?').get(id) as { author_id: number | null } | undefined;
     if (!r) throw new HttpError(404, 'Take not found');
     if (r.author_id !== v.id && !v.is_admin) throw new HttpError(403, 'Not your take');
     tx(this.db, () => {
@@ -339,8 +357,8 @@ export class LoreService {
     const [from, to] = this.monthRange(month);
     return this.db
       .prepare(
-        `SELECT h.id, h.body, ${nameSql('u')} AS author_name, SUM(b.value = -1) AS disagree, SUM(b.value = 1) AS agree
-         FROM hot_takes h JOIN users u ON u.id = h.author_id JOIN ballots b ON b.subject_type = 'hot_take' AND b.subject_id = h.id
+        `SELECT h.id, h.body, ${nameOr('u')} AS author_name, SUM(b.value = -1) AS disagree, SUM(b.value = 1) AS agree
+         FROM hot_takes h LEFT JOIN users u ON u.id = h.author_id JOIN ballots b ON b.subject_type = 'hot_take' AND b.subject_id = h.id
          WHERE h.created_at >= ? AND h.created_at < ? GROUP BY h.id HAVING disagree >= 3
          ORDER BY disagree - agree DESC, disagree DESC LIMIT 1`,
       )
@@ -362,10 +380,10 @@ export class LoreService {
   canon(v: Viewer, q?: string) {
     const rows = this.db
       .prepare(
-        `SELECT c.*, ${nameSql('u')} AS author_name, e.title AS event_title FROM canon_entries c JOIN users u ON u.id = c.author_id
+        `SELECT c.*, ${nameOr('u')} AS author_name, e.title AS event_title FROM canon_entries c LEFT JOIN users u ON u.id = c.author_id
          LEFT JOIN events e ON e.id = c.event_id ${q ? 'WHERE c.term LIKE ? OR c.origin LIKE ?' : ''} ORDER BY c.term COLLATE NOCASE LIMIT 500`,
       )
-      .all(...(q ? [`%${q}%`, `%${q}%`] : [])) as { id: number; term: string; origin: string; event_id: number | null; event_title: string | null; author_id: number; author_name: string; canon_since: string; created_at: string }[];
+      .all(...(q ? [`%${q}%`, `%${q}%`] : [])) as { id: number; term: string; origin: string; event_id: number | null; event_title: string | null; author_id: number | null; author_name: string; canon_since: string; created_at: string }[];
     const rx = reactionsFor(this.db, 'canon', rows.map((r) => r.id), v.id);
     return rows.map((r) => ({
       id: r.id, term: r.term, origin: r.origin, canonSince: r.canon_since, createdAt: r.created_at,
@@ -375,7 +393,7 @@ export class LoreService {
     }));
   }
   deleteCanon(v: Viewer, id: number) {
-    const r = this.db.prepare('SELECT author_id FROM canon_entries WHERE id = ?').get(id) as { author_id: number } | undefined;
+    const r = this.db.prepare('SELECT author_id FROM canon_entries WHERE id = ?').get(id) as { author_id: number | null } | undefined;
     if (!r) throw new HttpError(404, 'Not in the canon');
     if (r.author_id !== v.id && !v.is_admin) throw new HttpError(403, 'Not yours');
     tx(this.db, () => {
@@ -411,10 +429,10 @@ export class LoreService {
     return (
       this.db
         .prepare(
-          `SELECT x.*, ${nameSql('m')} AS member_name, ${nameSql('a')} AS author_name FROM eighty_sixed x
-           JOIN users a ON a.id = x.author_id LEFT JOIN users m ON m.id = x.member_id ORDER BY x.since DESC, x.id DESC LIMIT 500`,
+          `SELECT x.*, ${nameSql('m')} AS member_name, ${nameOr('a')} AS author_name FROM eighty_sixed x
+           LEFT JOIN users a ON a.id = x.author_id LEFT JOIN users m ON m.id = x.member_id ORDER BY x.since DESC, x.id DESC LIMIT 500`,
         )
-        .all() as { id: number; kind: string; name: string; reason: string; member_id: number | null; member_name: string | null; author_id: number; author_name: string; since: string }[]
+        .all() as { id: number; kind: string; name: string; reason: string; member_id: number | null; member_name: string | null; author_id: number | null; author_name: string; since: string }[]
     ).map((r) => ({
       id: r.id, kind: r.kind, name: r.name, reason: r.reason, since: r.since,
       member: r.member_id ? { id: r.member_id, name: r.member_name } : null,
@@ -423,7 +441,7 @@ export class LoreService {
     }));
   }
   delete86(v: Viewer, id: number) {
-    const r = this.db.prepare('SELECT author_id FROM eighty_sixed WHERE id = ?').get(id) as { author_id: number } | undefined;
+    const r = this.db.prepare('SELECT author_id FROM eighty_sixed WHERE id = ?').get(id) as { author_id: number | null } | undefined;
     if (!r) throw new HttpError(404, 'Not on the list');
     if (r.author_id !== v.id && !v.is_admin) throw new HttpError(403, 'Not yours to pardon');
     this.db.prepare('DELETE FROM eighty_sixed WHERE id = ?').run(id);
@@ -462,7 +480,7 @@ export class LoreService {
   }
   prophecies(v: Viewer) {
     const rows = this.db
-      .prepare(`SELECT p.*, ${nameSql('u')} AS author_name, u.emoji AS author_emoji FROM prophecies p JOIN users u ON u.id = p.author_id ORDER BY p.reveal_at DESC LIMIT 200`)
+      .prepare(`SELECT p.*, ${nameOr('u')} AS author_name, u.emoji AS author_emoji FROM prophecies p LEFT JOIN users u ON u.id = p.author_id ORDER BY p.reveal_at DESC LIMIT 200`)
       .all() as (ProphecyRow & { author_name: string; author_emoji: string | null })[];
     const t = this.tallies('prophecy', rows.map((r) => r.id), v.id);
     const n = now();
@@ -553,8 +571,9 @@ export class LoreService {
   tick() {
     const n = now();
     const claim = (key: string) => this.db.prepare('INSERT OR IGNORE INTO jobs_sent (key, sent_at) VALUES (?, ?)').run(key, n).changes > 0;
-    // Verdicts: announce once each case closes.
-    const closed = this.db.prepare('SELECT * FROM court_cases WHERE closes_at <= ? AND dismissed_at IS NULL AND closes_at > ?').all(n, new Date(Date.parse(n) - 7 * 86400_000).toISOString()) as CaseRow[];
+    // Verdicts: freeze, then announce once each case closes.
+    this.settleClosed();
+    const closed = this.db.prepare('SELECT * FROM court_cases WHERE closes_at <= ? AND dismissed_at IS NULL AND verdict IS NOT NULL AND closes_at > ?').all(n, new Date(Date.parse(n) - 7 * 86400_000).toISOString()) as CaseRow[];
     const t = this.tallies('court', closed.map((c) => c.id), -1);
     for (const c of closed) {
       if (!claim(`lore:verdict:${c.id}`)) continue;
@@ -580,8 +599,8 @@ export class LoreService {
   }
 }
 
-type CaseRow = { id: number; plaintiff_id: number; defendant_id: number; event_id: number | null; charge: string; sentence: string; rebuttal: string | null; closes_at: string; dismissed_at: string | null; created_at: string };
-type ProphecyRow = { id: number; author_id: number; body: string; reveal_at: string; outcome: number | null; decided_at: string | null; created_at: string };
+type CaseRow = { id: number; plaintiff_id: number | null; defendant_id: number | null; verdict: string | null; event_id: number | null; charge: string; sentence: string; rebuttal: string | null; closes_at: string; dismissed_at: string | null; created_at: string };
+type ProphecyRow = { id: number; author_id: number | null; body: string; reveal_at: string; outcome: number | null; decided_at: string | null; created_at: string };
 
 export function routes(ctx: ModuleCtx) {
   const s = new LoreService(ctx);
@@ -632,7 +651,16 @@ export function tick(ctx: ModuleCtx) {
 export function onMemberRemoved(ctx: ModuleCtx, userId: number, policy: RemovalPolicy) {
   const db = ctx.db;
   db.prepare('DELETE FROM superlative_votes WHERE voter_id = ? OR nominee_id = ?').run(userId, userId);
-  if (policy !== 'delete') return;
+  if (policy === 'keep') return;
+  if (policy === 'anonymize') {
+    // Strip identity from everything they wrote or were named in; the lore itself stays.
+    for (const t of ['hot_takes', 'prophecies', 'canon_entries', 'eighty_sixed']) db.prepare(`UPDATE ${t} SET author_id = NULL WHERE author_id = ?`).run(userId);
+    db.prepare('UPDATE court_cases SET plaintiff_id = NULL WHERE plaintiff_id = ?').run(userId);
+    db.prepare('UPDATE court_cases SET defendant_id = NULL WHERE defendant_id = ?').run(userId);
+    // A venue ban scoped to them means nothing without them (and NULL would ban the whole group).
+    db.prepare('DELETE FROM eighty_sixed WHERE member_id = ?').run(userId);
+    return;
+  }
   const takes = (db.prepare('SELECT id FROM hot_takes WHERE author_id = ?').all(userId) as { id: number }[]).map((r) => r.id);
   const proph = (db.prepare('SELECT id FROM prophecies WHERE author_id = ?').all(userId) as { id: number }[]).map((r) => r.id);
   const cases = (db.prepare('SELECT id FROM court_cases WHERE plaintiff_id = ? OR defendant_id = ?').all(userId, userId) as { id: number }[]).map((r) => r.id);

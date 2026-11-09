@@ -9,8 +9,12 @@ const LORE_TABS = [
   ['prophecies', '🔮 Prophecies'], ['superlatives', '🏆 Superlatives'], ['86', '🚫 86’d'], ['otd', '📅 On This Day'],
 ];
 const RENDER = { court: () => courtTab(query().get('case')), takes: takesTab, canon: canonTab, prophecies: propheciesTab, superlatives: superlativesTab, '86': list86Tab, otd: onThisDayTab };
-const loreSeg = (tab) => h('div', { class: 'seg', role: 'tablist' },
-  LORE_TABS.map(([k, label]) => h('a', { role: 'tab', class: `segbtn ${tab === k ? 'on' : ''}`, 'aria-selected': String(tab === k), href: k === 'quotes' ? '#/lore' : `#/lore?tab=${k}` }, label)));
+const loreSeg = (tab) => [
+  // Pages built by the photo lane that live under Lore.
+  h('div', { class: 'pv-quick' }, h('a', { class: 'btn sm ghost', href: '#/lore/map' }, '📍 Lore Map'), h('a', { class: 'btn sm ghost', href: '#/halls' }, '🏆 The Halls'), h('a', { class: 'btn sm ghost', href: '#/wrapped' }, '🎁 Wrapped')),
+  h('div', { class: 'seg', role: 'tablist' },
+    LORE_TABS.map(([k, label]) => h('a', { role: 'tab', class: `segbtn ${tab === k ? 'on' : ''}`, 'aria-selected': String(tab === k), href: k === 'quotes' ? '#/lore' : `#/lore?tab=${k}` }, label))),
+];
 
 const fill = (el, ...nodes) => el.replaceChildren(...nodes.flat(Infinity).filter((n) => n !== null && n !== undefined && n !== false));
 const query = () => new URLSearchParams(location.hash.split('?')[1] || '');
