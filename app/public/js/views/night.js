@@ -409,12 +409,12 @@ function tabSummaryCard(tab) {
   const owe = tab.iOwe.reduce((a, d) => a + d.cents, 0);
   const owed = tab.owedToMe.reduce((a, d) => a + d.cents, 0);
   return h(
-    'a',
-    { class: 'card tab-summary', href: '#/tab' },
+    'div',
+    { class: 'card tab-summary' },
     h('div', { class: 'kicker' }, '🧾 The tab'),
     h('div', { class: 'row-between' }, h('span', {}, 'You owe ', h('strong', {}, money(owe))), h('span', {}, 'Owed to you ', h('strong', {}, money(owed)))),
     tab.wallOfShame[0] ? h('p', { class: 'small' }, `Wall of Shame leader: ${tab.wallOfShame[0].from} owes ${tab.wallOfShame[0].to} ${money(tab.wallOfShame[0].cents)} (${tab.wallOfShame[0].days}d)`) : null,
-    h('div', { class: 'row-wrap' }, h('span', { class: 'small' }, 'Open the tab →'), h('a', { class: 'btn ghost sm', href: '#/wagers' }, '🎲 Wager Book')),
+    h('div', { class: 'row-wrap' }, h('a', { class: 'btn ghost sm', href: '#/tab' }, '🧾 Open the tab'), h('a', { class: 'btn ghost sm', href: '#/wagers' }, '🎲 Wager Book'), h('a', { class: 'btn ghost sm', href: '#/dating' }, '💘 Dating')),
   );
 }
 
