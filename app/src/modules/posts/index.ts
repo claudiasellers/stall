@@ -66,6 +66,13 @@ export const migrations = [
   CREATE INDEX posts_unmasked ON posts(unmasked_at) WHERE unmasked_at IS NOT NULL;
   `,
   },
+  {
+    id: 'posts-002',
+    sql: `
+  -- Admin moderation: a locked post takes no new reactions, votes, stances or claims.
+  ALTER TABLE posts ADD COLUMN locked_at TEXT;
+  `,
+  },
 ];
 
 // ------------------------------------------------------------------ types
@@ -97,6 +104,7 @@ export type PostRow = {
   resolver_name: string | null;
   resolved_at: string | null;
   unmasked_at: string | null;
+  locked_at: string | null;
   expires_at: string | null;
   created_at: string;
 };
@@ -230,6 +238,20 @@ export class PostsService {
     return p;
   }
 
+  /** For actions that change a post's state: refuses locked posts. */
+  mustGetOpen(id: number): PostRow {
+    const p = this.mustGet(id);
+    if (p.locked_at) throw new HttpError(423, 'An admin locked this post');
+    return p;
+  }
+
+  setLocked(viewer: Viewer, id: number, locked: boolean) {
+    if (!viewer.is_admin) throw new HttpError(403, 'Admins only');
+    this.mustGet(id);
+    this.db.prepare('UPDATE posts SET locked_at = ?, updated_at = ? WHERE id = ?').run(locked ? now() : null, now(), id);
+    this.changed();
+  }
+
   list(opts: { kinds?: PostKind[]; eventId?: number; subjectId?: number; status?: string; before?: string; limit?: number }): PostRow[] {
     this.purgeExpired();
     const where = [VISIBLE];
@@ -333,7 +355,7 @@ export class PostsService {
   }
 
   react(viewer: Viewer, id: number, emoji: string): { added: boolean; forgiven: boolean } {
-    const p = this.mustGet(id);
+    const p = this.mustGetOpen(id);
     let forgiven = false;
     const added = tx(this.db, () => {
       const on = toggleReaction(this.db, 'post', id, viewer.id, emoji);
@@ -353,7 +375,7 @@ export class PostsService {
   }
 
   setStance(viewer: Viewer, id: number, stance: unknown, note: unknown) {
-    const p = this.mustGet(id);
+    const p = this.mustGetOpen(id);
     if (p.kind !== 'quote' && p.kind !== 'irish_goodbye') throw new HttpError(400, 'Nothing to claim here');
     if (p.subject_id !== viewer.id) throw new HttpError(403, 'Only the person named can claim or dispute it');
     const s = stance === 'claimed' || stance === 'disputed' ? stance : null;
@@ -369,7 +391,7 @@ export class PostsService {
 
   /** Lost & Found: "I have it". Auto-closes the post and pings the owner. */
   markFound(viewer: Viewer, id: number) {
-    const p = this.mustGet(id);
+    const p = this.mustGetOpen(id);
     if (p.kind !== 'lost_item') throw new HttpError(400, 'Not a lost item');
     if (p.status === 'found') throw new HttpError(409, 'Someone already has it');
     this.db.prepare(`UPDATE posts SET status = 'found', resolved_by = ?, resolved_at = ?, updated_at = ? WHERE id = ?`).run(viewer.id, now(), now(), id);
@@ -380,7 +402,7 @@ export class PostsService {
   }
 
   reopen(viewer: Viewer, id: number) {
-    const p = this.mustGet(id);
+    const p = this.mustGetOpen(id);
     if (p.kind !== 'lost_item') throw new HttpError(400, 'Not a lost item');
     if (p.author_id !== viewer.id && p.resolved_by !== viewer.id && !viewer.is_admin) throw new HttpError(403, 'Not yours to reopen');
     this.db.prepare(`UPDATE posts SET status = 'open', resolved_by = NULL, resolved_at = NULL, updated_at = ? WHERE id = ?`).run(now(), id);
@@ -411,7 +433,7 @@ export class PostsService {
   }
 
   voteUnmask(viewer: Viewer, id: number): { revealed: boolean; votes: number } {
-    const p = this.mustGet(id);
+    const p = this.mustGetOpen(id);
     if (p.kind !== 'regret' || !p.anonymous) throw new HttpError(400, 'Only anonymous regrets can be unmasked');
     if (p.unmasked_at) throw new HttpError(409, 'Already unmasked');
     if (p.author_id === viewer.id) throw new HttpError(400, 'Nice try');
@@ -645,7 +667,7 @@ export class PostsService {
     // Only after 11am house time, once per day (jobs_sent dedupes across restarts and instances).
     const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: this.tz, hour: 'numeric', hourCycle: 'h23' }).format(new Date(now())));
     if (hour < 11) return;
-    const claimed = this.db.prepare('INSERT OR IGNORE INTO jobs_sent (key) VALUES (?)').run(key);
+    const claimed = this.db.prepare('INSERT OR IGNORE INTO jobs_sent (key, sent_at) VALUES (?, ?)').run(key, now());
     if (!claimed.changes) return;
     const weekAgo = new Date(Date.parse(now()) - 7 * 86400_000).toISOString();
     const q =
@@ -679,6 +701,7 @@ export class PostsService {
     us: ReturnType<PostsService['unmaskState']> | null,
   ) {
     const mine = r.author_id === viewer.id;
+    const open = !r.locked_at;
     // Anonymous author identity never leaves the server unless the group unmasked it.
     const hidden = !!r.anonymous && !r.unmasked_at;
     const sev = r.severity ? SEVERITY[r.severity - 1] : null;
@@ -700,6 +723,7 @@ export class PostsService {
       status: r.status,
       resolvedBy: r.resolved_by ? { id: r.resolved_by, name: r.resolver_name } : null,
       resolvedAt: r.resolved_at,
+      locked: !!r.locked_at,
       expiresAt: r.expires_at,
       createdAt: r.created_at,
       reactions,
@@ -707,10 +731,11 @@ export class PostsService {
       unmask: hidden && r.kind === 'regret' && us ? { votes: unmask.get(r.id)?.votes ?? 0, mine: unmask.get(r.id)?.mine ?? false, needed: us.needed, available: !us.usedOn } : null,
       can: {
         delete: mine || !!viewer.is_admin,
-        stance: (r.kind === 'quote' || r.kind === 'irish_goodbye') && r.subject_id === viewer.id,
-        found: r.kind === 'lost_item' && r.status === 'open',
-        reopen: r.kind === 'lost_item' && r.status === 'found' && (mine || r.resolved_by === viewer.id || !!viewer.is_admin),
-        unmask: hidden && r.kind === 'regret' && !mine && !!us && !us.usedOn,
+        stance: open && (r.kind === 'quote' || r.kind === 'irish_goodbye') && r.subject_id === viewer.id,
+        found: open && r.kind === 'lost_item' && r.status === 'open',
+        reopen: open && r.kind === 'lost_item' && r.status === 'found' && (mine || r.resolved_by === viewer.id || !!viewer.is_admin),
+        unmask: open && hidden && r.kind === 'regret' && !mine && !!us && !us.usedOn,
+        lock: !!viewer.is_admin,
       },
     };
   }
@@ -832,6 +857,10 @@ export function routes(ctx: Ctx) {
     svc.reopen(me(req), pid(req.params.id));
     res.json({ post: svc.views([svc.mustGet(pid(req.params.id))], me(req))[0] });
   });
+  r.post('/posts/:id/lock', (req, res) => {
+    svc.setLocked(me(req), pid(req.params.id), req.body?.locked !== false);
+    res.json({ post: svc.views([svc.mustGet(pid(req.params.id))], me(req))[0] });
+  });
   r.post('/posts/:id/unmask', (req, res) => {
     const out = svc.voteUnmask(me(req), pid(req.params.id));
     res.json({ ...out, post: svc.views([svc.mustGet(pid(req.params.id))], me(req))[0] });
@@ -839,7 +868,7 @@ export function routes(ctx: Ctx) {
 
   // Generic reactions for other modules' targets (photos, events...). Posts use /posts/:id/react
   // so absolution runs. The owning module is responsible for visibility of its targets.
-  const REACTABLE = new Set(['photo', 'caption', 'event', 'feed_item']);
+  const REACTABLE = new Set(['photo', 'caption', 'event', 'feed_item', 'canon']);
   r.post('/reactions', (req, res) => {
     const type = String(req.body?.targetType ?? '');
     const targetId = pid(req.body?.targetId);

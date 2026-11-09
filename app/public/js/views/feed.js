@@ -116,6 +116,7 @@ export function postCard(p, { onChange, onRemove, showKind = true } = {}) {
   const top = h('div', { class: 'pv-top' },
     showKind ? h('span', { class: 'pv-kind' }, KIND_LABEL[p.kind] || p.kind) : null,
     p.event ? h('a', { class: 'pv-event', href: `#/events/${p.event.id}` }, `📍 ${p.event.title || 'that night'}`) : null,
+    p.locked ? h('span', { class: 'pv-kind' }, '🔒 Locked') : null,
     h('span', { class: 'pv-time' }, ago(p.createdAt)),
   );
 
@@ -189,6 +190,7 @@ export function postCard(p, { onChange, onRemove, showKind = true } = {}) {
     stance,
     h('div', { class: 'pv-foot' },
       reactionBar('post', p.id, p.reactions, { onChange: (np) => { if (np && np.status !== p.status) redraw(np); } }),
+      p.can.lock ? h('button', { class: 'pv-del', 'aria-label': p.locked ? 'Unlock' : 'Lock', onclick: () => act('lock', { locked: !p.locked }) }, p.locked ? '🔓' : '🔒') : null,
       p.can.delete ? h('button', { class: 'pv-del', 'aria-label': 'Delete', onclick: del }, '🗑') : null),
   );
   return card;

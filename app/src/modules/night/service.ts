@@ -1057,4 +1057,160 @@ export class NightService {
     }
     return { sent };
   }
+
+  // ======================================================== Wager Book
+
+  createWager(userId: number, body: { claim?: unknown; sideA?: unknown; sideB?: unknown; stake?: unknown; stakeCents?: unknown; side?: unknown; locksAt?: unknown; eventId?: unknown }) {
+    const claim = clean(body.claim, 'claim', 140);
+    const sideA = clean(body.sideA, 'sideA', 40, false) || 'Yes';
+    const sideB = clean(body.sideB, 'sideB', 40, false) || 'No';
+    if (sideA.toLowerCase() === sideB.toLowerCase()) throw new HttpError(400, 'The two sides must be different');
+    const stake = body.stakeCents !== undefined ? Number(body.stakeCents) : Math.round(Number(body.stake) * 100);
+    if (!Number.isInteger(stake) || stake <= 0 || stake > 100_000) throw new HttpError(400, 'Stake must be $0.01–$1,000');
+    const locksAt = body.locksAt ? isoOrThrow(body.locksAt, 'locksAt') : null;
+    const eventId = optInt(body.eventId);
+    const side = body.side === 'b' ? 'b' : 'a';
+    const id = tx(this.db, () => {
+      const wid = Number(
+        this.db.prepare('INSERT INTO wagers (event_id, created_by, claim, side_a, side_b, stake_cents, locks_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(eventId, userId, claim, sideA, sideB, stake, locksAt)
+          .lastInsertRowid,
+      );
+      this.db.prepare('INSERT INTO wager_bets (wager_id, user_id, side) VALUES (?, ?, ?)').run(wid, userId, side);
+      return wid;
+    });
+    const name = this.nameOf(userId);
+    this.ctx.svc.notifyMembers(`🎲 ${name} opened a bet: “${claim}”. ${money(stake)} a head. ${sideA} or ${sideB}?`, '/wagers', userId);
+    this.feed('wager_opened', userId, eventId, 'wager', id, `${name} bet ${money(stake)}: “${claim}”`);
+    this.refresh('tab');
+    return this.wagerView(id, userId);
+  }
+
+  bet(wagerId: number, userId: number, side: unknown) {
+    if (side !== 'a' && side !== 'b') throw new HttpError(400, 'Pick a side');
+    const w = this.mustWager(wagerId);
+    if (w.settled_at) throw new HttpError(409, 'This bet is settled');
+    if (w.locks_at && Date.parse(w.locks_at) <= clock.now()) throw new HttpError(409, 'Betting is locked');
+    this.db
+      .prepare('INSERT INTO wager_bets (wager_id, user_id, side) VALUES (?, ?, ?) ON CONFLICT (wager_id, user_id) DO UPDATE SET side = excluded.side, created_at = excluded.created_at')
+      .run(wagerId, userId, side);
+    this.refresh('tab');
+    return this.wagerView(wagerId, userId);
+  }
+
+  unbet(wagerId: number, userId: number) {
+    const w = this.mustWager(wagerId);
+    if (w.settled_at) throw new HttpError(409, 'This bet is settled');
+    if (w.created_by === userId) throw new HttpError(409, 'You opened it. You’re in.');
+    if (w.locks_at && Date.parse(w.locks_at) <= clock.now()) throw new HttpError(409, 'Betting is locked. You’re in.');
+    this.db.prepare('DELETE FROM wager_bets WHERE wager_id = ? AND user_id = ?').run(wagerId, userId);
+    this.refresh('tab');
+    return this.wagerView(wagerId, userId);
+  }
+
+  private mustWager(id: number) {
+    const w = this.db.prepare('SELECT * FROM wagers WHERE id = ?').get(id) as
+      | { id: number; event_id: number | null; created_by: number; claim: string; side_a: string; side_b: string; stake_cents: number; locks_at: string | null; winner: string | null; settled_at: string | null; created_at: string }
+      | undefined;
+    if (!w) throw new HttpError(404, 'Bet not found');
+    return w;
+  }
+
+  /**
+   * The opener (or an admin) calls it. Each loser's stake is split across the winners,
+   * written to The Tab as one expense per winner (payer = winner, shares = what each loser owes them).
+   * Nobody on the winning side, or 'void': no money moves.
+   */
+  settleWager(wagerId: number, userId: number, isAdmin: boolean, winner: unknown) {
+    if (winner !== 'a' && winner !== 'b' && winner !== 'void') throw new HttpError(400, 'Winner is a, b or void');
+    const w = this.mustWager(wagerId);
+    if (w.created_by !== userId && !isAdmin) throw new HttpError(403, 'Only whoever opened the bet can call it');
+    if (w.settled_at) throw new HttpError(409, 'Already settled');
+    const bets = this.db.prepare('SELECT user_id, side FROM wager_bets WHERE wager_id = ?').all(wagerId) as { user_id: number; side: 'a' | 'b' }[];
+    const winners = winner === 'void' ? [] : bets.filter((b) => b.side === winner).map((b) => b.user_id);
+    const losers = winner === 'void' ? [] : bets.filter((b) => b.side !== winner).map((b) => b.user_id);
+    const label = winner === 'a' ? w.side_a : winner === 'b' ? w.side_b : 'void';
+    tx(this.db, () => {
+      const claimed = this.db.prepare('UPDATE wagers SET winner = ?, settled_at = ? WHERE id = ? AND settled_at IS NULL').run(winner, now(), wagerId).changes;
+      if (!claimed) throw new HttpError(409, 'Already settled');
+      if (!winners.length || !losers.length) return;
+      // owed[winner][loser] in cents; spread each loser's stake evenly, leftover cents to the first winners.
+      const owed = new Map<number, Map<number, number>>(winners.map((x) => [x, new Map()]));
+      for (const l of losers) {
+        const base = Math.floor(w.stake_cents / winners.length);
+        let extra = w.stake_cents - base * winners.length;
+        for (const x of winners) owed.get(x)!.set(l, base + (extra-- > 0 ? 1 : 0));
+      }
+      const insE = this.db.prepare('INSERT INTO tab_expenses (event_id, payer_id, created_by, description, amount_cents, wager_id) VALUES (?, ?, ?, ?, ?, ?)');
+      const insS = this.db.prepare('INSERT INTO tab_shares (expense_id, user_id, amount_cents) VALUES (?, ?, ?)');
+      for (const [x, m] of owed) {
+        const total = [...m.values()].reduce((a, c) => a + c, 0);
+        if (!total) continue;
+        const eid = Number(insE.run(w.event_id, x, userId, `🎲 Won: “${w.claim}”`.slice(0, 80), total, wagerId).lastInsertRowid);
+        for (const [l, c] of m) if (c > 0) insS.run(eid, l, c);
+      }
+    });
+    const names = (ids: number[]) => ids.map((i) => this.nameOf(i)).join(', ');
+    if (winner === 'void') {
+      for (const b of bets) this.ctx.svc.notify(b.user_id, null, `🎲 “${w.claim}” was called off. No money moves.`, '/wagers');
+    } else if (!winners.length || !losers.length) {
+      // Everyone was on one side: nobody owes anybody.
+      for (const b of bets) this.ctx.svc.notify(b.user_id, null, `🎲 “${w.claim}”: ${label}. Nobody bet against anyone, so no money moves.`, '/wagers');
+      this.feed('wager_settled', null, w.event_id, 'wager', wagerId, `“${w.claim}”: ${label}`);
+    } else {
+      for (const l of losers) this.ctx.svc.notify(l, null, `🎲 “${w.claim}”: ${label}. You lost ${money(w.stake_cents)}. It’s on the Tab.`, '/tab');
+      for (const x of winners) this.ctx.svc.notify(x, null, `🎲 “${w.claim}”: ${label}. You won${losers.length ? ` off ${names(losers)}` : ''}. Collect on the Tab.`, '/tab');
+      this.feed('wager_settled', null, w.event_id, 'wager', wagerId, `“${w.claim}”: ${label}. ${winners.length ? `${names(winners)} cash in` : 'Nobody called it'}`);
+    }
+    this.refresh('tab');
+    return this.wagerView(wagerId, userId);
+  }
+
+  private wagerView(id: number, viewerId: number) {
+    return this.wagers(viewerId, { ids: [id] })[0];
+  }
+
+  /** Open bets first, then recent settled ones. Two queries for any page size. */
+  wagers(viewerId: number, opts: { eventId?: number | null; before?: string; limit?: number; ids?: number[] } = {}) {
+    const limit = Math.min(Math.max(opts.limit ?? 30, 1), 50);
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (opts.ids?.length) (where.push(`w.id IN (${opts.ids.map(() => '?').join(',')})`), params.push(...opts.ids));
+    if (opts.eventId) (where.push('w.event_id = ?'), params.push(opts.eventId));
+    if (opts.before) (where.push('w.created_at < ?'), params.push(opts.before));
+    const rows = this.db
+      .prepare(
+        `SELECT w.*, ${NAME} AS name FROM wagers w JOIN users u ON u.id = w.created_by ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+         ORDER BY (w.settled_at IS NOT NULL), w.created_at DESC LIMIT ?`,
+      )
+      .all(...params, limit) as { id: number; event_id: number | null; created_by: number; name: string; claim: string; side_a: string; side_b: string; stake_cents: number; locks_at: string | null; winner: string | null; settled_at: string | null; created_at: string }[];
+    if (!rows.length) return [];
+    const ids = rows.map((r) => r.id);
+    const bets = this.db
+      .prepare(`SELECT b.wager_id, b.user_id, b.side, ${NAME} AS name FROM wager_bets b JOIN users u ON u.id = b.user_id WHERE b.wager_id IN (${ids.map(() => '?').join(',')})`)
+      .all(...ids) as { wager_id: number; user_id: number; side: 'a' | 'b'; name: string }[];
+    const nowMs = clock.now();
+    return rows.map((w) => {
+      const mine = bets.filter((b) => b.wager_id === w.id);
+      const a = mine.filter((b) => b.side === 'a');
+      const b = mine.filter((b) => b.side === 'b');
+      return {
+        id: w.id,
+        eventId: w.event_id,
+        by: w.name,
+        mineToCall: w.created_by === viewerId && !w.settled_at,
+        claim: w.claim,
+        stakeCents: w.stake_cents,
+        locksAt: w.locks_at,
+        locked: !!w.locks_at && Date.parse(w.locks_at) <= nowMs,
+        settled: !!w.settled_at,
+        winner: w.winner,
+        mySide: mine.find((x) => x.user_id === viewerId)?.side ?? null,
+        sides: [
+          { key: 'a', label: w.side_a, people: a.map((x) => x.name), pot: a.length * w.stake_cents },
+          { key: 'b', label: w.side_b, people: b.map((x) => x.name), pot: b.length * w.stake_cents },
+        ],
+        createdAt: w.created_at,
+      };
+    });
+  }
 }

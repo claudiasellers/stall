@@ -283,6 +283,7 @@ route('/admin', async () => {
       tile('/ideas', '🗳️', 'Suggestion Box', 'Feature requests, votes, approve or pass.'),
       tile('/admin/building', '🔨', 'Building', 'What Claude is building now, and Claude’s questions.'),
       tile('/admin/members', '🪪', 'Members & invites', 'Invite codes, admins, removing someone.'),
+      tile('/admin/moderation', '🧹', 'Moderation', 'Remove posts or photos, lock threads, see vetoes.'),
       tile('/admin/house', '🏠', 'House rules', 'Photo drop hour, regret self-destruct, plus-one timer.'))));
 });
 
