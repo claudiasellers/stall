@@ -322,14 +322,12 @@ function tabSummaryCard(tab) {
 }
 
 async function members() {
-  // Foundation exposes the member list; fall back gracefully if the path differs.
-  for (const path of ['/members', '/users']) {
-    try {
-      const r = await api(path);
-      return (r.members || r.users || []).map((m) => ({ id: m.id, name: m.displayName || m.display_name || m.username }));
-    } catch {}
+  try {
+    const { members } = await api('/members');
+    return members.map((m) => ({ id: m.id, name: m.emoji ? `${m.emoji} ${m.name}` : m.name }));
+  } catch {
+    return [];
   }
-  return [];
 }
 
 function expenseForm(people, eventId, reload) {

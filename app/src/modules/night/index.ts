@@ -1,5 +1,5 @@
 // Night-of tools module: Home Safe roll call + buddies, Where We At, Next Move,
-// Cooked Meter, The Tab. Register with one line in app/src/modules/index.ts.
+// Cooked Meter, The Tab, Draft Jail, Rideshare Roulette, hydration nag. Register with one line in app/src/modules/index.ts.
 import { NIGHT_MIGRATIONS } from './schema.ts';
 import { NightService, type NightCtx } from './service.ts';
 import { nightRoutes } from './routes.ts';
@@ -25,6 +25,8 @@ export const module = {
       homeSafe: s.tickHomeSafe(nowMs),
       polls: s.closeDuePolls(nowMs),
       tabNudges: s.tickTabNudges(nowMs),
+      drafts: s.closeDueDrafts(nowMs),
+      hydration: s.tickHydration(nowMs),
     };
   },
 };

@@ -44,7 +44,7 @@ const NAME = `COALESCE(NULLIF(u.display_name, ''), u.username)`;
 const MEMBER = `u.removed_at IS NULL`;
 
 type Session = { id: number; event_id: number | null; title: string; started_by: number; cutoff_at: string; status: string; closed_at: string | null; created_at: string };
-type Member = { session_id: number; user_id: number; name: string; buddy_id: number | null; home_at: string | null; escalation: number; share_location: number; lat: number | null; lng: number | null; location_at: string | null };
+type Member = { session_id: number; user_id: number; name: string; buddy_id: number | null; home_at: string | null; escalation: number; share_location: number; lat: number | null; lng: number | null; location_at: string | null; heading: string | null; hydrate: number };
 
 const clean = (v: unknown, name: string, max: number, required = true): string => {
   const s = typeof v === 'string' ? v.trim() : '';
@@ -73,8 +73,9 @@ export class NightService {
     this.db = ctx.db;
   }
 
-  private refresh(scope = 'night') {
-    queueMicrotask(() => this.ctx.bus.emit('board', { scope }));
+  private refresh(topic = 'night') {
+    // Reaches open screens as window event 'stall:<topic>' and re-runs the current view's refresh.
+    queueMicrotask(() => this.ctx.bus.emit('live', { topic }));
   }
 
   memberIds(): number[] {
@@ -352,7 +353,8 @@ export class NightService {
       closedAt: s.closed_at,
       phase: s.status !== 'active' ? 'closed' : nowMs < cutoff ? 'out' : nowMs < cutoff + BUDDY_PING_AFTER ? 'rollcall' : 'missing',
       joined: !!me,
-      me: me ? { home: !!me.home_at, sharingLocation: !!me.share_location, buddyIds: [...myBuddies] } : null,
+      me: me ? { home: !!me.home_at, sharingLocation: !!me.share_location, buddyIds: [...myBuddies], heading: me.heading, hydrate: !!me.hydrate } : null,
+      rides: this.rides(sessionId),
       members: members.map((m) => {
         const isBuddy = myBuddies.has(m.user_id);
         return {
@@ -360,6 +362,7 @@ export class NightService {
           name: m.name,
           buddyId: m.buddy_id,
           buddyName: m.buddy_id ? (members.find((x) => x.user_id === m.buddy_id)?.name ?? null) : null,
+          heading: m.heading,
           home: !!m.home_at,
           homeAt: m.home_at,
           // Missing = past cutoff and not home. Escalation level is shown to everyone so the group can act.
@@ -826,6 +829,161 @@ export class NightService {
       if (!this.once(`tab-nudge:${d.fromId}:${d.toId}:${week}`)) continue;
       this.ctx.svc.notify(d.fromId, null, `🧾 You’ve owed ${this.nameOf(d.toId)} ${money(d.cents)} for ${days} days. The Wall of Shame sees you.`, '/#/tab');
       sent++;
+    }
+    return { sent };
+  }
+
+  // ======================================================== Draft Jail
+
+  /** Lock up a text you shouldn't send. The group votes; the draft is destroyed when voting closes. */
+  jailDraft(userId: number, body: { recipient?: unknown; body?: unknown; minutes?: unknown }) {
+    const recipient = clean(body.recipient, 'recipient', 40, false) || 'my ex';
+    const text = clean(body.body, 'body', 1000);
+    const minutes = body.minutes === undefined ? 30 : Number(body.minutes);
+    if (!Number.isInteger(minutes) || minutes < 5 || minutes > 240) throw new HttpError(400, 'Timer must be 5–240 minutes');
+    const closesAt = new Date(Date.now() + minutes * MIN).toISOString();
+    const id = Number(this.db.prepare('INSERT INTO draft_jail (user_id, recipient, body, closes_at) VALUES (?, ?, ?, ?)').run(userId, recipient, text, closesAt).lastInsertRowid);
+    this.ctx.svc.notifyMembers(`🚔 ${this.nameOf(userId)} put a text to ${recipient} in Draft Jail. Send it, absolutely not, or wait till noon?`, '/#/tonight', userId);
+    this.refresh();
+    return { id, closesAt };
+  }
+
+  voteDraft(draftId: number, userId: number, choice: unknown) {
+    if (choice !== 'send' && choice !== 'no' && choice !== 'noon') throw new HttpError(400, 'Pick send, no or noon');
+    this.closeDueDrafts(Date.now());
+    const d = this.db.prepare('SELECT user_id FROM draft_jail WHERE id = ?').get(draftId) as { user_id: number } | undefined;
+    if (!d) throw new HttpError(404, 'That draft has already been destroyed');
+    this.db
+      .prepare('INSERT INTO draft_jail_votes (draft_id, user_id, choice) VALUES (?, ?, ?) ON CONFLICT (draft_id, user_id) DO UPDATE SET choice = excluded.choice')
+      .run(draftId, userId, choice);
+    this.refresh();
+    return this.draftView(draftId, userId);
+  }
+
+  /** The author can pull it early (and get the verdict so far). */
+  releaseDraft(draftId: number, userId: number) {
+    const d = this.db.prepare('SELECT user_id FROM draft_jail WHERE id = ?').get(draftId) as { user_id: number } | undefined;
+    if (!d) throw new HttpError(404, 'Already gone');
+    if (d.user_id !== userId) throw new HttpError(403, 'Not your draft');
+    this.closeDraft(draftId);
+    return { ok: true };
+  }
+
+  private tally(draftId: number) {
+    const rows = this.db.prepare('SELECT choice, COUNT(*) AS n FROM draft_jail_votes WHERE draft_id = ? GROUP BY choice').all(draftId) as { choice: string; n: number }[];
+    const t: Record<string, number> = { send: 0, no: 0, noon: 0 };
+    for (const r of rows) t[r.choice] = r.n;
+    return t;
+  }
+
+  private closeDraft(draftId: number) {
+    const d = this.db.prepare('SELECT * FROM draft_jail WHERE id = ?').get(draftId) as { user_id: number; recipient: string } | undefined;
+    if (!d) return;
+    const t = this.tally(draftId);
+    // Ties go to the cautious option: no beats noon beats send.
+    const verdict = (['no', 'noon', 'send'] as const).reduce((best, c) => (t[c] > t[best] ? c : best), 'no' as 'no' | 'noon' | 'send');
+    const deleted = this.db.prepare('DELETE FROM draft_jail WHERE id = ?').run(draftId).changes; // votes cascade
+    if (!deleted) return;
+    const line = { send: '📤 The group says send it. On your head be it.', no: '🚫 The group says absolutely not. Put the phone down.', noon: '🕛 The group says wait till noon.' }[verdict];
+    this.ctx.svc.notify(d.user_id, null, `${line} (${t.send} send · ${t.no} no · ${t.noon} noon). The draft has been destroyed.`, '/#/tonight');
+    this.refresh();
+  }
+
+  closeDueDrafts(nowMs: number) {
+    const due = this.db.prepare('SELECT id FROM draft_jail WHERE closes_at <= ?').all(new Date(nowMs).toISOString()) as { id: number }[];
+    for (const d of due) this.closeDraft(d.id);
+    return { closed: due.length };
+  }
+
+  private draftView(draftId: number, viewerId: number) {
+    const d = this.db.prepare(`SELECT j.*, ${NAME} AS name FROM draft_jail j JOIN users u ON u.id = j.user_id WHERE j.id = ?`).get(draftId) as
+      | { id: number; user_id: number; name: string; recipient: string; body: string; closes_at: string; created_at: string }
+      | undefined;
+    if (!d) throw new HttpError(404, 'Gone');
+    const mine = this.db.prepare('SELECT choice FROM draft_jail_votes WHERE draft_id = ? AND user_id = ?').get(draftId, viewerId) as { choice: string } | undefined;
+    return { id: d.id, by: d.name, mine: d.user_id === viewerId, recipient: d.recipient, body: d.body, closesAt: d.closes_at, createdAt: d.created_at, tally: this.tally(draftId), myChoice: mine?.choice ?? null };
+  }
+
+  drafts(viewerId: number) {
+    this.closeDueDrafts(Date.now());
+    return (this.db.prepare('SELECT id FROM draft_jail ORDER BY id DESC LIMIT 20').all() as { id: number }[]).map((r) => this.draftView(r.id, viewerId));
+  }
+
+  // ======================================================== Rideshare Roulette
+
+  setHeading(sessionId: number, userId: number, heading: unknown) {
+    const h = clean(heading, 'heading', 40, false);
+    const r = this.db.prepare('UPDATE night_members SET heading = ? WHERE session_id = ? AND user_id = ?').run(h || null, sessionId, userId);
+    if (!r.changes) throw new HttpError(404, 'You’re not on tonight’s roll call');
+    this.refresh();
+    return { heading: h || null };
+  }
+
+  /** Group everyone still out by heading (max 4 per car) and pick who books each car. */
+  rideshareRoulette(sessionId: number, userId: number) {
+    const s = this.mustSession(sessionId);
+    if (s.status !== 'active') throw new HttpError(409, 'This night is over');
+    if (!this.db.prepare('SELECT 1 FROM night_members WHERE session_id = ? AND user_id = ?').get(sessionId, userId)) throw new HttpError(403, 'Join the night first');
+    const out = this.members(sessionId).filter((m) => !m.home_at);
+    const byHeading = new Map<string, (typeof out)[number][]>();
+    for (const m of out) {
+      if (!m.heading) continue;
+      const key = m.heading.trim().toLowerCase();
+      byHeading.set(key, [...(byHeading.get(key) ?? []), m]);
+    }
+    const cars: { heading: string; booker: string; riders: string[] }[] = [];
+    tx(this.db, () => {
+      for (const group of byHeading.values()) {
+        const shuffled = [...group].sort(() => Math.random() - 0.5);
+        for (let i = 0; i < shuffled.length; i += 4) {
+          const car = shuffled.slice(i, i + 4);
+          const booker = car[Math.floor(Math.random() * car.length)];
+          this.db.prepare('INSERT INTO night_rides (session_id, heading, booker_id, rider_ids) VALUES (?, ?, ?, ?)').run(sessionId, group[0].heading!, booker.user_id, JSON.stringify(car.map((c) => c.user_id)));
+          cars.push({ heading: group[0].heading!, booker: booker.name, riders: car.map((c) => c.name) });
+          for (const c of car) {
+            const others = car.filter((x) => x.user_id !== c.user_id).map((x) => x.name);
+            const msg = c.user_id === booker.user_id
+              ? `🚕 Rideshare Roulette picked you. Book the car to ${group[0].heading}${others.length ? ` for you + ${others.join(', ')}` : ''}.`
+              : `🚕 ${booker.name} is booking your car to ${group[0].heading}${others.length > 1 ? ` (with ${others.filter((n) => n !== booker.name).join(', ')})` : ''}.`;
+            this.ctx.svc.notify(c.user_id, null, msg, '/#/tonight');
+          }
+        }
+      }
+    });
+    if (!cars.length) throw new HttpError(409, 'Nobody has said where they’re heading yet');
+    this.refresh();
+    return { cars, noHeading: out.filter((m) => !m.heading).map((m) => m.name) };
+  }
+
+  rides(sessionId: number) {
+    const rows = this.db.prepare(`SELECT r.*, ${NAME} AS booker FROM night_rides r JOIN users u ON u.id = r.booker_id WHERE r.session_id = ? ORDER BY r.id DESC LIMIT 12`).all(sessionId) as {
+      heading: string; booker: string; rider_ids: string; created_at: string;
+    }[];
+    const names = new Map((this.db.prepare(`SELECT u.id, ${NAME} AS name FROM users u`).all() as { id: number; name: string }[]).map((r) => [r.id, r.name]));
+    return rows.map((r) => ({ heading: r.heading, booker: r.booker, riders: (JSON.parse(r.rider_ids) as number[]).map((id) => names.get(id) ?? '?'), at: r.created_at }));
+  }
+
+  // ======================================================== Hydration nag
+
+  setHydrate(sessionId: number, userId: number, on: unknown) {
+    const r = this.db.prepare('UPDATE night_members SET hydrate = ? WHERE session_id = ? AND user_id = ?').run(on ? 1 : 0, sessionId, userId);
+    if (!r.changes) throw new HttpError(404, 'You’re not on tonight’s roll call');
+    return { hydrate: !!on };
+  }
+
+  /** Tick: "water. now." every 90 minutes from the start of the night until you're home, for people who opted in. */
+  tickHydration(nowMs: number) {
+    let sent = 0;
+    const every = 90 * MIN;
+    for (const s of this.activeSessions()) {
+      const slot = Math.floor((nowMs - Date.parse(s.created_at)) / every);
+      if (slot < 1) continue;
+      const due = this.db.prepare('SELECT user_id FROM night_members WHERE session_id = ? AND hydrate = 1 AND home_at IS NULL').all(s.id) as { user_id: number }[];
+      for (const m of due) {
+        if (!this.once(`hydrate:${s.id}:${m.user_id}:${slot}`)) continue;
+        this.ctx.svc.notify(m.user_id, null, ['💧 water. now.', '💧 hydrate or diedrate', '💧 one glass of water. we’re watching.'][slot % 3], '/#/tonight');
+        sent++;
+      }
     }
     return { sent };
   }

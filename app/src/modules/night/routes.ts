@@ -30,6 +30,7 @@ export function nightRoutes(night: NightService) {
       trail: night.trail(eventId),
       polls: night.polls(me, eventId),
       cooked: night.cookedBoard(),
+      drafts: night.drafts(me),
       cookedLabels: COOKED_LABELS,
       homeSafe: { buddyPingAfterMin: BUDDY_PING_AFTER / 60_000, groupPingAfterMin: GROUP_PING_AFTER / 60_000 },
     });
@@ -45,6 +46,16 @@ export function nightRoutes(night: NightService) {
   r.post('/night/sessions/:id/cutoff', (req, res) => res.json({ session: night.extendCutoff(pid(req), uid(req), req.body?.cutoffAt) }));
   r.post('/night/sessions/:id/location', (req, res) => res.json(night.shareLocation(pid(req), uid(req), req.body ?? {})));
   r.post('/night/sessions/:id/end', (req, res) => res.json(night.endSession(pid(req), uid(req))));
+
+  r.post('/night/sessions/:id/heading', (req, res) => res.json(night.setHeading(pid(req), uid(req), req.body?.heading)));
+  r.post('/night/sessions/:id/rideshare', (req, res) => res.json(night.rideshareRoulette(pid(req), uid(req))));
+  r.post('/night/sessions/:id/hydrate', (req, res) => res.json(night.setHydrate(pid(req), uid(req), req.body?.on)));
+
+  // ---- Draft Jail
+  r.get('/night/drafts', (req, res) => res.json({ drafts: night.drafts(uid(req)) }));
+  r.post('/night/drafts', (req, res) => res.status(201).json(night.jailDraft(uid(req), req.body ?? {})));
+  r.post('/night/drafts/:id/vote', (req, res) => res.json({ draft: night.voteDraft(pid(req), uid(req), req.body?.choice) }));
+  r.post('/night/drafts/:id/release', (req, res) => res.json(night.releaseDraft(pid(req), uid(req))));
 
   // ---- Where We At
   r.get('/night/trail', (req, res) => res.json(night.trail(eventQ(req))));

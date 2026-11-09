@@ -140,4 +140,43 @@ export const NIGHT_MIGRATIONS: { id: string; sql: string }[] = [
   );
   `,
   },
+  {
+    id: 'night-002',
+    sql: `
+  -- Draft Jail: the text you want to send your ex, put to a group vote instead.
+  -- Rows are hard-deleted when the vote closes; only the verdict push survives.
+  CREATE TABLE draft_jail (
+    id INTEGER PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    recipient TEXT NOT NULL,              -- free text: "my ex", "Theo", "the group chat"
+    body TEXT NOT NULL,
+    closes_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  CREATE INDEX draft_jail_closes ON draft_jail(closes_at);
+  CREATE INDEX draft_jail_user ON draft_jail(user_id);
+  CREATE INDEX draft_jail_time ON draft_jail(created_at);
+  CREATE TABLE draft_jail_votes (
+    draft_id INTEGER NOT NULL REFERENCES draft_jail(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    choice TEXT NOT NULL CHECK (choice IN ('send', 'no', 'noon')),
+    PRIMARY KEY (draft_id, user_id)
+  );
+  CREATE INDEX draft_jail_votes_user ON draft_jail_votes(user_id);
+
+  -- Rideshare Roulette + hydration nag ride on the Home Safe roster.
+  ALTER TABLE night_members ADD COLUMN heading TEXT;            -- "Bushwick", "UES", "LES"
+  ALTER TABLE night_members ADD COLUMN hydrate INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE night_rides (
+    id INTEGER PRIMARY KEY,
+    session_id INTEGER NOT NULL REFERENCES night_sessions(id) ON DELETE CASCADE,
+    heading TEXT NOT NULL,
+    booker_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    rider_ids TEXT NOT NULL,              -- JSON array of user ids
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  CREATE INDEX night_rides_session ON night_rides(session_id, created_at);
+  CREATE INDEX night_rides_booker ON night_rides(booker_id);
+  `,
+  },
 ];
