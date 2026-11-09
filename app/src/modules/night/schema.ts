@@ -178,4 +178,38 @@ export const NIGHT_MIGRATIONS: { id: string; sql: string }[] = [
   CREATE INDEX night_rides_booker ON night_rides(booker_id);
   `,
   },
+  {
+    id: 'night-003',
+    sql: `
+  -- Wager Book: two sides, equal stakes, settled into The Tab (losers owe winners).
+  CREATE TABLE wagers (
+    id INTEGER PRIMARY KEY,
+    event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
+    created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    claim TEXT NOT NULL,                  -- "Max leaves before midnight"
+    side_a TEXT NOT NULL DEFAULT 'Yes',
+    side_b TEXT NOT NULL DEFAULT 'No',
+    stake_cents INTEGER NOT NULL CHECK (stake_cents > 0),
+    locks_at TEXT,                        -- no new bets after this
+    winner TEXT CHECK (winner IN ('a', 'b', 'void')),
+    settled_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  CREATE INDEX wagers_open ON wagers(settled_at, created_at);
+  CREATE INDEX wagers_event ON wagers(event_id);
+  CREATE INDEX wagers_created_by ON wagers(created_by);
+  CREATE INDEX wagers_time ON wagers(created_at);
+  CREATE TABLE wager_bets (
+    wager_id INTEGER NOT NULL REFERENCES wagers(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    side TEXT NOT NULL CHECK (side IN ('a', 'b')),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (wager_id, user_id)
+  );
+  CREATE INDEX wager_bets_user ON wager_bets(user_id);
+  -- Which Tab expenses a settled wager produced, so the payout is traceable.
+  ALTER TABLE tab_expenses ADD COLUMN wager_id INTEGER REFERENCES wagers(id) ON DELETE SET NULL;
+  CREATE INDEX tab_expenses_wager ON tab_expenses(wager_id);
+  `,
+  },
 ];
