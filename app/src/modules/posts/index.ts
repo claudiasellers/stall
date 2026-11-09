@@ -656,6 +656,25 @@ export class PostsService {
     this.changed();
   }
 
+  // ---------- Quote of the Month announcement (from tick) ----------
+
+  /** On the 1st after noon house time, crown last month's most-reacted quote and ping the group (and the speaker). */
+  quoteOfMonthAnnouncement() {
+    const t = new Date(now());
+    const p = houseParts(t, this.tz);
+    const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: this.tz, hour: 'numeric', hourCycle: 'h23' }).format(t));
+    if (p.d !== 1 || hour < 12) return;
+    const last = prevMonthKey(monthKey(t, this.tz));
+    const q = this.quoteOfMonth(last);
+    if (!q) return;
+    const claimed = this.db.prepare('INSERT OR IGNORE INTO jobs_sent (key, sent_at) VALUES (?, ?)').run(`posts:qotm:${last}`, now());
+    if (!claimed.changes) return;
+    const speaker = q.subject_name ?? q.subject_label ?? 'someone';
+    const month = new Date(Date.UTC(+last.slice(0, 4), +last.slice(5) - 1, 15)).toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
+    this.ctx.svc.notifyMembers(`🏆 Quote of ${month}: “${clip(q.body, 90)}” — ${speaker}`, `/lore?post=${q.id}`, q.subject_id ?? undefined);
+    if (q.subject_id) this.ctx.svc.notify(q.subject_id, null, `🏆 You won Quote of ${month}: “${clip(q.body, 80)}”. Iconic or tragic, you decide.`, `/lore?post=${q.id}`);
+  }
+
   // ---------- Daily Quote (from tick) ----------
 
   dailyQuote() {
@@ -938,6 +957,7 @@ export function tick(ctx: Ctx) {
   const svc = new PostsService(ctx);
   svc.purgeExpired(true);
   svc.dailyQuote();
+  svc.quoteOfMonthAnnouncement();
 }
 
 /**
