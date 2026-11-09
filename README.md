@@ -127,6 +127,12 @@ For a native iOS app, the remaining work is APNs. Add a `devices` table and a se
 
 `POST $STALL_WEBHOOK_URL` with headers `X-Stall-Event`, `X-Stall-Delivery` (used for dedupe), `X-Stall-Timestamp`, and `X-Stall-Signature: sha256=HMAC(secret, "<timestamp>.<raw body>")`. Signatures older than 5 minutes are rejected. Events: `request.queued`, `request.replied`, `request.cancelled` (see `shared/types.ts`).
 
+## Analytics
+
+Optional product analytics go to Mixpanel from the server only (no browser script, no autocapture,
+hashed member ids, no IP geolocation, no content). Set `MIXPANEL_TOKEN` in Render to turn it on.
+Rules, setup and the event catalog: [docs/ANALYTICS.md](docs/ANALYTICS.md).
+
 ## Layout
 
 ```
