@@ -50,9 +50,10 @@ function story(data, onClose) {
   return root;
 }
 
-async function wrappedView({ year }) {
+async function wrappedView({ year }, alive = () => true) {
   const y = year ? Number(year) : undefined;
   const data = await api(`/wrapped${y ? `?year=${y}` : ''}`);
+  if (!alive()) return;
   const open = () => {
     if (!data.cards.length) return toast('Nothing to wrap yet. Go out.');
     const s = story(data, () => s.isConnected && s.remove());
@@ -75,10 +76,10 @@ async function wrappedView({ year }) {
     open();
   }
 }
-route('/wrapped', () => wrappedView({}));
-route('/wrapped/:year', (p) => {
+route('/wrapped', (_p, alive) => wrappedView({}, alive));
+route('/wrapped/:year', (p, alive) => {
   if (!/^\d{4}$/.test(p.year)) return go('/wrapped');
-  return wrappedView(p);
+  return wrappedView(p, alive);
 });
 
 // ------------------------------------------------------------------ Halls
@@ -93,8 +94,9 @@ function hallCard(board, shame) {
   );
 }
 
-route('/halls', async () => {
+route('/halls', async (_p, alive = () => true) => {
   const { fame, shame } = await api('/halls');
+  if (!alive()) return;
   const body = h('div', {});
   let tab = 'fame';
   const draw = () => fill(body,

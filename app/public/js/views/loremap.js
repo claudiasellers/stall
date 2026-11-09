@@ -29,8 +29,9 @@ const monthLabel = (ym) => {
   return `${new Date(y, m - 1, 1).toLocaleString([], { month: 'long' })} ’${String(y).slice(2)}`;
 };
 
-route('/lore/map', async () => {
+route('/lore/map', async (_p, alive = () => true) => {
   let data = await api('/lore-map');
+  if (!alive()) return;
   let moving = null; // place id waiting for a tap
   const sheet = h('div', { class: 'lm-sheet' });
   const svg = s('svg', { viewBox: '0 0 1000 1000', class: 'lm-map', role: 'img', 'aria-label': 'Map of the group’s places in New York' });

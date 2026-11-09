@@ -187,5 +187,9 @@ export const module: StallModule = {
   routes,
   onMemberRemoved: (ctx, userId, policy) => {
     if (policy === 'delete') ctx.db.prepare('DELETE FROM lore_incidents WHERE created_by = ?').run(userId);
+    else if (policy === 'anonymize') {
+      ctx.db.prepare('UPDATE lore_incidents SET created_by = NULL WHERE created_by = ?').run(userId);
+      ctx.db.prepare('UPDATE lore_places SET created_by = NULL WHERE created_by = ?').run(userId);
+    }
   },
 };
