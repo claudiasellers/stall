@@ -6,6 +6,7 @@ import './js/views/events.js';
 import './js/views/feed.js';
 import './js/views/lore.js';
 import './js/views/photos.js';
+import './js/views/wrapped.js';
 import './js/views/you.js';
 import './js/views/admin.js';
 
