@@ -22,6 +22,7 @@ import {
 import { startOutbox } from './outbox.ts';
 import { startPush, pushEnabled, saveSubscription, removeSubscription, ensureVapidKeys } from './push.ts';
 import { ACTIVE_STATUSES, type RequestStatus } from '../../shared/types.ts';
+import { initAnalytics, track, trackAppOpen } from './analytics.ts';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 
@@ -100,6 +101,7 @@ export function createApp(db: Db, cfg: AppConfig) {
   });
   orch.post('/requests/:id/complete', (req, res) => {
     svc.orchComplete(id(req), { summary: str(req.body.summary, 'summary'), commit: req.body.commit, branch: req.body.branch });
+    track('feature_shipped', null);
     res.json({ ok: true });
   });
   orch.post('/requests/:id/fail', (req, res) => {
@@ -144,6 +146,9 @@ export function createApp(db: Db, cfg: AppConfig) {
       { username: String(b.username ?? ''), password: String(b.password ?? ''), code: String(b.code ?? ''), displayName: b.displayName, emoji: b.emoji },
       cfg.bootstrapCode,
     );
+    const via = cfg.bootstrapCode && String(b.code ?? '') === cfg.bootstrapCode ? 'bootstrap' : 'invite';
+    track('signed_up', user.id, { via });
+    if (via === 'invite') track('invite_redeemed', user.id);
     sessionResponse(req, res, user);
   });
   api.post('/auth/login', async (req, res) => {
@@ -151,6 +156,7 @@ export function createApp(db: Db, cfg: AppConfig) {
     if (!authLimit(`login:${req.ip}:${username.toLowerCase()}`)) throw new HttpError(429, 'Too many attempts. Try again later.');
     const user = await login(db, username, String(req.body?.password ?? ''));
     if (!user) throw new HttpError(401, 'Wrong username or password');
+    track('logged_in', user.id);
     sessionResponse(req, res, user);
   });
   api.post('/auth/logout', (req, res) => {
@@ -162,6 +168,7 @@ export function createApp(db: Db, cfg: AppConfig) {
 
   api.get('/me', (req, res) => {
     if (!req.user) return res.json({ user: null });
+    trackAppOpen(req.user.id, isNative(req) ? 'native' : 'web');
     res.json({ user: publicUser(req.user), csrf: req.csrf, unread: svc.unreadCount(req.user.id) });
   });
 
@@ -217,6 +224,7 @@ export function createApp(db: Db, cfg: AppConfig) {
   api.get('/members', (_req, res) => res.json({ members: listMembers(db).map(publicMember) }));
   api.patch('/me', (req, res) => {
     const m = updateProfile(db, req.user!.id, req.body?.displayName, req.body?.emoji);
+    track('profile_updated', req.user!.id);
     res.json({ user: publicUser({ ...req.user!, display_name: m.display_name, emoji: m.emoji }) });
   });
   api.get('/house', (_req, res) => res.json({ house: getHouse(db), tz: cfg.houseTz }));
@@ -224,6 +232,7 @@ export function createApp(db: Db, cfg: AppConfig) {
   api.get('/admin/invites', requireAdmin, (_req, res) => res.json({ invites: listInvites(db) }));
   api.post('/admin/invites', requireAdmin, (req, res) => {
     const inv = createInvite(db, req.user!.id, req.body?.note, req.body?.ttlDays);
+    track('invite_created', req.user!.id);
     res.status(201).json({ invite: { ...inv, link: `${cfg.publicUrl.replace(/\/$/, '')}/#/join?code=${encodeURIComponent(inv.code)}` } });
   });
   api.post('/admin/invites/:id/revoke', requireAdmin, (req, res) => {
@@ -231,7 +240,9 @@ export function createApp(db: Db, cfg: AppConfig) {
     res.json({ ok: true });
   });
   api.post('/admin/members/:id/remove', requireAdmin, (req, res) => {
-    removeMember(ctx, req.user!.id, id(req), String(req.body?.policy ?? '') as RemovalPolicy);
+    const policy = String(req.body?.policy ?? '') as RemovalPolicy;
+    removeMember(ctx, req.user!.id, id(req), policy);
+    track('member_removed', req.user!.id, { posts_policy: policy });
     bus.emit('board');
     res.json({ ok: true });
   });
@@ -290,6 +301,7 @@ export function createApp(db: Db, cfg: AppConfig) {
 
   api.post('/requests', (req, res) => {
     const r = svc.createRequest(req.user!.id, String(req.body?.title ?? ''), String(req.body?.description ?? ''));
+    track('feature_suggested', req.user!.id);
     res.status(201).json({ request: view(r, req.user!.id, 1) });
   });
 
@@ -329,7 +341,11 @@ export function createApp(db: Db, cfg: AppConfig) {
 
   api.post('/requests/:id/vote', (req, res) => {
     const value = Number(req.body?.value);
+    const before = svc.mustGet(id(req)).status;
     const r = svc.vote(id(req), req.user!.id, value);
+    track('feature_voted', req.user!.id, { value: value > 0 ? 'up' : value < 0 ? 'down' : 'clear' });
+    if (before === 'proposed' && r.status === 'queued') track('feature_approved', null, { by: 'consensus' });
+    if (before === 'proposed' && r.status === 'rejected') track('feature_rejected', null, { by: 'consensus' });
     res.json({ request: view(r, req.user!.id, value) });
   });
 
@@ -356,10 +372,12 @@ export function createApp(db: Db, cfg: AppConfig) {
   });
   api.post('/requests/:id/approve', requireAdmin, (req, res) => {
     svc.approve(id(req), `${req.user!.username} gave this the green light. It is in line to be built!`);
+    track('feature_approved', req.user!.id, { by: 'admin' });
     res.json({ ok: true });
   });
   api.post('/requests/:id/reject', requireAdmin, (req, res) => {
     svc.reject(id(req), req.user!.id);
+    track('feature_rejected', req.user!.id, { by: 'admin' });
     res.json({ ok: true });
   });
   api.post('/requests/:id/retry', requireAdmin, (req, res) => {
@@ -395,6 +413,7 @@ export function createApp(db: Db, cfg: AppConfig) {
     } catch {
       throw new HttpError(400, 'Bad push subscription');
     }
+    track('push_enabled', req.user!.id);
     res.json({ ok: true });
   });
   api.post('/push/unsubscribe', (req, res) => {
@@ -510,6 +529,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const db = openDb(cfg.dbPath, cfg.tursoUrl ? { url: cfg.tursoUrl, authToken: cfg.tursoToken } : undefined);
   console.log(`[stall] database: ${cfg.tursoUrl ? 'Turso (hosted)' : cfg.dbPath}`);
   ensureVapidKeys(db, cfg);
+  initAnalytics();
   const { app, runTick } = createApp(db, cfg);
   // While awake, run module housekeeping every minute; the outside pinger covers sleep.
   setInterval(() => void runTick().catch((e) => console.error('[stall] tick', e)), 60_000).unref();

@@ -46,6 +46,11 @@ services:
         generateValue: true
       - key: STALL_WEBHOOK_SECRET
         generateValue: true
+      # Product analytics (docs/ANALYTICS.md). Leave MIXPANEL_TOKEN empty to keep it off.
+      - key: MIXPANEL_TOKEN
+        sync: false
+      - key: ANALYTICS_ID_SALT
+        generateValue: true
       # From the Turso dashboard: database URL (libsql://...) and a token.
       - key: TURSO_DATABASE_URL
         sync: false
