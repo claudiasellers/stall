@@ -3,6 +3,7 @@ import { boot } from './js/core.js';
 import './js/views/auth.js';
 import './js/views/night.js';
 import './js/views/dating.js';
+import './js/views/moderation.js';
 import './js/views/events.js';
 import './js/views/feed.js';
 import './js/views/lore.js';

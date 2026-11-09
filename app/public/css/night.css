@@ -58,3 +58,7 @@ input[type=range] { width: 100%; accent-color: var(--pink); }
 .rideshare { display: grid; gap: 6px; margin: 8px 0; }
 .roster { margin: 8px 0; }
 .roster select.inline { margin-left: 6px; padding: 4px 8px; font-size: 13px; }
+.mod { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 8px; }
+.mod-row { display: grid; grid-template-columns: 28px 1fr; gap: 6px 10px; align-items: start; }
+.mod-row > .row-wrap { grid-column: 2; }
+.btn.danger { color: var(--red); }
