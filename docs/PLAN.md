@@ -19,15 +19,16 @@ Work runs in parallel lanes since Nov 9 (see [COORDINATION.md](COORDINATION.md) 
 
 | Phase | Slice | Owner | Status |
 |---|---|---|---|
-| 1 Foundation | Invite-only joining, bootstrap admin, member removal with keep/anonymize/delete, profiles, clock + house tz, house rules, module system, tick, storage | lead | ✅ built |
-| 1 Foundation | New navigation (Tonight · Events · Feed · Lore · You · Admin), feature board behind Admin, Suggest a feature, welcome / Add to Home Screen | lead | ✅ built |
-| 2 v1 core | Events, honest RSVPs, location drop, plus-one vetting, bring list, stages, spontaneous, guest links | events lane | 🔨 |
-| 2 v1 core | Quote Wall, The Morning After, reactions, Feed, Lost & Found, Irish Goodbye | posts lane | 🔨 |
-| 2 v1 core | Photo drop: R2, unlock at 11am, veto, signed URLs, watermark, captions | photos lane | 🔨 |
-| 3 Night-of | Home Safe + buddies, Where We At, Next Move, Cooked Meter, The Tab, Draft Jail, Rideshare, Hydration | night lane | 🔨 |
-| — | Analytics (Mixpanel, enums and counts only) | analytics lane | 🔨 |
-| 4 Lore | Group Court, Hot Takes, The Canon, Superlatives, On This Day, 86'd List, Prophecies | | queued |
-| 5 Seasonal | Trips, football, Stall Wrapped | | queued |
+| 1 Foundation | Invite-only joining, bootstrap admin, removal with keep/anonymize/delete, profiles, clock + house tz, house rules, module system, tick, storage, new navigation, feature board behind Admin | lead | 🚢 #3 |
+| 2 v1 core | Events, honest RSVPs, location drop, plus-ones, bring list, stages, spontaneous, recurring, guest links, archive page | events | 🚢 #4, #10, #15 |
+| 2 v1 core | Quote Wall, The Morning After, reactions, Feed, Lost & Found, Irish Goodbye, Quote of the Month | posts | 🚢 #4, #14 |
+| 2 v1 core | Photo drop (R2, 11am unlock, veto, signed URLs, watermark, captions), photo moderation | photos | 🚢 #4, #16 |
+| 3 Night-of | Home Safe + buddies, Where We At, Next Move, Cooked Meter, The Tab, Draft Jail, Rideshare, Hydration, Wager Book | night | 🚢 #4, #13 |
+| 3 | Dating (opt-in Roster, vetting, debriefs), Admin moderation | night | 🚢 #13, #7 |
+| 4 Lore | Group Court, Hot Takes, Canon + Lore 101, Prophecies, Superlatives, 86'd, On This Day | posts | 🚢 #12 |
+| 4 Lore | Lore Map, Stall Wrapped, Hall of Fame / Shame | photos | 🚢 #5, #16 |
+| 5 Seasonal | Trips, football (pick'em, squares, watch parties), event templates | events | 🚢 #9, #10 |
+| — | Analytics (Mixpanel, enums and counts only, off until configured) | analytics | 🚢 #4 |
 
 ## Ground rules every slice is reviewed against
 
