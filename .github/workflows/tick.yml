@@ -1,0 +1,20 @@
+# Wakes the app every 10 minutes so scheduled pushes (photo drop, Home Safe) and
+# purges run even though Render's free plan sleeps. Needs repo secrets STALL_URL and
+# STALL_TICK_TOKEN. Does nothing until both are set.
+name: Tick
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call /api/v1/tick
+        env:
+          STALL_URL: ${{ secrets.STALL_URL }}
+          STALL_TICK_TOKEN: ${{ secrets.STALL_TICK_TOKEN }}
+        run: |
+          if [ -z "$STALL_URL" ] || [ -z "$STALL_TICK_TOKEN" ]; then echo "Secrets not set; skipping."; exit 0; fi
+          curl -fsS --retry 3 --retry-delay 20 --max-time 90 -X POST -H "Authorization: Bearer $STALL_TICK_TOKEN" "$STALL_URL/api/v1/tick"

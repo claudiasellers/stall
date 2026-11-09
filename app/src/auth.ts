@@ -1,15 +1,16 @@
 import { randomBytes, scrypt as scryptCb, timingSafeEqual, createHash } from 'node:crypto';
 import { promisify } from 'node:util';
 import type { Request, Response, NextFunction } from 'express';
-import { type Db, tx } from './db.ts';
+import { type Db, tx, now } from './db.ts';
 import { HttpError } from './service.ts';
+import { clock } from './clock.ts';
 
 const scrypt = promisify(scryptCb) as (pw: string, salt: Buffer, len: number, opts: object) => Promise<Buffer>;
 const SCRYPT = { N: 1 << 15, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 const SESSION_TTL_MS = 30 * 24 * 3600 * 1000;
 export const COOKIE = 'stall_session';
 
-export type User = { id: number; username: string; is_admin: number };
+export type User = { id: number; username: string; is_admin: number; display_name: string | null; emoji: string | null };
 
 declare module 'express-serve-static-core' {
   interface Request {
@@ -50,21 +51,78 @@ export function validateCredentials(username: string, password: string) {
   if (password.length < 8 || password.length > 200) throw new HttpError(400, 'Password must be at least 8 characters');
 }
 
-export async function signup(db: Db, username: string, password: string): Promise<User> {
+export const INVITE_TTL_DAYS_DEFAULT = 7;
+const INVITE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I
+
+/** A human-typeable single-use code, e.g. STALL-7KQ2-XM9P-RT. Only its hash is stored. */
+export function newInviteCode(): string {
+  const bytes = randomBytes(10);
+  const chars = [...bytes].map((b) => INVITE_ALPHABET[b % INVITE_ALPHABET.length]).join('');
+  return `STALL-${chars.slice(0, 4)}-${chars.slice(4, 8)}-${chars.slice(8)}`;
+}
+
+/** Normalize what people type: case, spaces, missing dashes. */
+export function normalizeInviteCode(code: string): string {
+  const raw = code.toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/^STALL/, '');
+  if (raw.length !== 10) return '';
+  return `STALL-${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8)}`;
+}
+
+export const hashInvite = (code: string) => hashToken(`invite:${normalizeInviteCode(code)}`);
+
+const BAD_INVITE = 'That invite code doesn’t work. Ask whoever invited you for a fresh one.';
+
+export type SignupInput = { username: string; password: string; code: string; displayName?: string; emoji?: string };
+
+export function validateProfile(displayName: string | undefined, emoji: string | undefined) {
+  const name = (displayName ?? '').trim();
+  if (name.length > 40) throw new HttpError(400, 'Display name must be 40 characters or fewer');
+  const em = (emoji ?? '').trim();
+  if (em && ([...new Intl.Segmenter().segment(em)].length > 2 || em.length > 16)) throw new HttpError(400, 'Pick one emoji');
+  return { name: name || null, emoji: em || null };
+}
+
+/**
+ * Invite-only: every account needs a valid single-use invite code. The very first
+ * account (no users yet) needs the one-time bootstrap code from the server's
+ * environment instead, and becomes the admin.
+ */
+export async function signup(db: Db, input: SignupInput, bootstrapCode: string): Promise<User> {
+  const { username, password } = input;
   validateCredentials(username, password);
+  const profile = validateProfile(input.displayName, input.emoji);
   const hash = await hashPassword(password);
   return tx(db, () => {
+    const isFirst = !db.prepare('SELECT 1 FROM users LIMIT 1').get();
+    let inviteId: number | null = null;
+    if (isFirst) {
+      const given = input.code.trim();
+      if (!bootstrapCode || given.length !== bootstrapCode.length || !timingSafeEqual(Buffer.from(given), Buffer.from(bootstrapCode)))
+        throw new HttpError(403, bootstrapCode ? BAD_INVITE : 'Stall isn’t set up yet: the server needs STALL_BOOTSTRAP_CODE.');
+    } else {
+      const inv = db
+        .prepare('SELECT id FROM invites WHERE code_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?')
+        .get(hashInvite(input.code), now()) as { id: number } | undefined;
+      if (!inv) throw new HttpError(403, BAD_INVITE);
+      inviteId = inv.id;
+    }
     if (db.prepare('SELECT 1 FROM users WHERE username = ?').get(username)) throw new HttpError(409, 'That username is taken');
-    const isFirst = !(db.prepare('SELECT 1 FROM users LIMIT 1').get());
     const res = db
-      .prepare('INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)')
-      .run(username, hash, isFirst ? 1 : 0);
-    return { id: Number(res.lastInsertRowid), username, is_admin: isFirst ? 1 : 0 };
+      .prepare('INSERT INTO users (username, password_hash, is_admin, display_name, emoji, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(username, hash, isFirst ? 1 : 0, profile.name, profile.emoji, now());
+    const id = Number(res.lastInsertRowid);
+    if (inviteId !== null) {
+      const used = db.prepare('UPDATE invites SET used_by = ?, used_at = ? WHERE id = ? AND used_at IS NULL').run(id, now(), inviteId);
+      if (used.changes !== 1) throw new HttpError(403, BAD_INVITE);
+    }
+    return { id, username, is_admin: isFirst ? 1 : 0, display_name: profile.name, emoji: profile.emoji };
   });
 }
 
 export async function login(db: Db, username: string, password: string): Promise<User | null> {
-  const row = db.prepare('SELECT id, username, is_admin, password_hash FROM users WHERE username = ?').get(username) as
+  const row = db
+    .prepare('SELECT id, username, is_admin, display_name, emoji, password_hash FROM users WHERE username = ? AND removed_at IS NULL')
+    .get(username) as
     | (User & { password_hash: string })
     | undefined;
   if (!row) {
@@ -73,7 +131,7 @@ export async function login(db: Db, username: string, password: string): Promise
     return null;
   }
   if (!(await verifyPassword(password, row.password_hash))) return null;
-  return { id: row.id, username: row.username, is_admin: row.is_admin };
+  return { id: row.id, username: row.username, is_admin: row.is_admin, display_name: row.display_name, emoji: row.emoji };
 }
 
 export function createSession(db: Db, userId: number): { token: string; csrf: string } {
@@ -83,9 +141,9 @@ export function createSession(db: Db, userId: number): { token: string; csrf: st
     hashToken(token),
     userId,
     csrf,
-    Date.now() + SESSION_TTL_MS,
+    clock.now() + SESSION_TTL_MS,
   );
-  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
+  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(clock.now());
   return { token, csrf };
 }
 
@@ -110,17 +168,17 @@ export function setSessionCookie(res: Response, token: string, secure: boolean) 
 /** Attaches req.user / req.csrf when a valid session cookie is present. */
 export function sessionMiddleware(db: Db) {
   const stmt = db.prepare(
-    `SELECT u.id, u.username, u.is_admin, s.csrf FROM sessions s JOIN users u ON u.id = s.user_id
-     WHERE s.id = ? AND s.expires_at > ?`,
+    `SELECT u.id, u.username, u.is_admin, u.display_name, u.emoji, s.csrf FROM sessions s JOIN users u ON u.id = s.user_id
+     WHERE s.id = ? AND s.expires_at > ? AND u.removed_at IS NULL`,
   );
   return (req: Request, _res: Response, next: NextFunction) => {
     const auth = req.headers.authorization;
     const bearer = auth?.startsWith('Bearer ') ? auth.slice(7).trim() : undefined;
     const token = bearer ?? readCookie(req, COOKIE);
     if (token) {
-      const row = stmt.get(hashToken(token), Date.now()) as (User & { csrf: string }) | undefined;
+      const row = stmt.get(hashToken(token), clock.now()) as (User & { csrf: string }) | undefined;
       if (row) {
-        req.user = { id: row.id, username: row.username, is_admin: row.is_admin };
+        req.user = { id: row.id, username: row.username, is_admin: row.is_admin, display_name: row.display_name, emoji: row.emoji };
         req.csrf = row.csrf;
         req.authVia = bearer ? 'bearer' : 'cookie';
       }

@@ -40,13 +40,13 @@ export function startPush(db: Db, cfg: AppConfig) {
   const drop = db.prepare('DELETE FROM push_subscriptions WHERE id = ?');
   const unread = db.prepare('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND read_at IS NULL');
 
-  bus.on('notify', async ({ userId, requestId, body }: { userId: number; requestId: number | null; body: string }) => {
+  bus.on('notify', async ({ userId, requestId, body, link }: { userId: number; requestId: number | null; body: string; link?: string }) => {
     const badge = (unread.get(userId) as { n: number }).n;
     const payload = JSON.stringify({
       title: 'Stall',
       body,
-      url: requestId ? `/#/requests/${requestId}` : '/#/notifications',
-      tag: requestId ? `request-${requestId}` : undefined,
+      url: link ? `/#${link}` : requestId ? `/#/requests/${requestId}` : '/#/notifications',
+      tag: link ?? (requestId ? `request-${requestId}` : undefined),
       badge,
     });
     for (const s of subs.all(userId) as { id: number; endpoint: string; p256dh: string; auth: string }[]) {

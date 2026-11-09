@@ -16,8 +16,25 @@ services:
         value: "true"
       - key: TRUST_PROXY
         value: "true"
-      - key: ALLOW_SIGNUP
-        value: "true"
+      # Invite-only. This one-time code creates the first admin account; after that,
+      # admins hand out single-use invite codes from Admin → Members.
+      - key: STALL_BOOTSTRAP_CODE
+        generateValue: true
+      - key: HOUSE_TZ
+        value: America/New_York
+      # Bearer token for /api/v1/tick, called by the cron pinger (.github/workflows/tick.yml).
+      - key: STALL_TICK_TOKEN
+        generateValue: true
+      # Photos: Cloudflare R2 (private bucket). Without these, photos go to local disk,
+      # which Render's free plan wipes on restart.
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
       - key: VOTE_MIN_UPVOTES
         value: "3"
       - key: CONSENSUS_RATIO
