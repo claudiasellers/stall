@@ -401,18 +401,26 @@ export class Service {
   }
 
   admins(): number[] {
-    return (this.db.prepare('SELECT id FROM users WHERE is_admin = 1').all() as { id: number }[]).map((r) => r.id);
+    return (this.db.prepare('SELECT id FROM users WHERE is_admin = 1 AND removed_at IS NULL').all() as { id: number }[]).map((r) => r.id);
   }
 
   // ---------- notifications ----------
 
-  notify(userId: number, requestId: number | null, body: string) {
-    this.db.prepare('INSERT INTO notifications (user_id, request_id, body) VALUES (?, ?, ?)').run(userId, requestId, body);
+  notify(userId: number, requestId: number | null, body: string, link?: string) {
+    this.db
+      .prepare('INSERT INTO notifications (user_id, request_id, body, link, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(userId, requestId, body, link ?? null, now());
     // Emit after the surrounding transaction has committed.
     queueMicrotask(() => {
-      bus.emit(`user:${userId}`, { type: 'notification', body, requestId });
-      bus.emit('notify', { userId, requestId, body });
+      bus.emit(`user:${userId}`, { type: 'notification', body, requestId, link });
+      bus.emit('notify', { userId, requestId, body, link });
     });
+  }
+
+  /** Notify every active member (optionally except one). */
+  notifyMembers(body: string, link: string, exceptId?: number) {
+    const ids = this.db.prepare('SELECT id FROM users WHERE removed_at IS NULL AND id != ?').all(exceptId ?? 0) as { id: number }[];
+    for (const u of ids) this.notify(u.id, null, body, link);
   }
 
   unreadCount(userId: number): number {
@@ -426,7 +434,7 @@ export class Service {
   notifications(userId: number, limit = 100) {
     return this.db
       .prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT ?')
-      .all(userId, limit) as { id: number; request_id: number | null; body: string; read_at: string | null; created_at: string }[];
+      .all(userId, limit) as { id: number; request_id: number | null; link: string | null; body: string; read_at: string | null; created_at: string }[];
   }
 
   markRead(userId: number, requestId?: number) {

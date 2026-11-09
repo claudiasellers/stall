@@ -95,7 +95,7 @@ main { flex: 1; width: 100%; max-width: 680px; margin: 0 auto; padding: 4px 16px
 .tabbar {
   position: fixed; z-index: 20; left: 12px; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 10px);
   max-width: 520px; margin: 0 auto; height: var(--tabbar-h);
-  display: grid; grid-template-columns: repeat(4, 1fr); padding: 6px;
+  display: grid; grid-template-columns: repeat(5, 1fr); padding: 6px;
   background: rgb(28 17 48 / 78%); border: 1px solid var(--line); border-radius: 999px;
   backdrop-filter: saturate(1.6) blur(18px); -webkit-backdrop-filter: saturate(1.6) blur(18px);
   box-shadow: 0 12px 40px rgb(0 0 0 / 45%);
@@ -315,3 +315,15 @@ textarea { min-height: 150px; resize: vertical; }
 @keyframes fall { to { transform: translateY(110vh) rotate(720deg); } }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* ---------- group app additions ---------- */
+.tabbar.n6 { grid-template-columns: repeat(6, 1fr); max-width: 560px; }
+.tabbar.n6 a { font-size: 10px; }
+.card.tile { display: flex; gap: 14px; align-items: center; color: var(--text); }
+.card.tile .e { font-size: 30px; width: 48px; height: 48px; display: grid; place-items: center; border-radius: 16px; background: var(--glass-2); flex: none; }
+.code { display: block; font: 800 22px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.06em; padding: 10px 0; user-select: all; }
+.emoji-in { font-size: 24px; text-align: center; }
+.emoji-field { width: 84px; flex: none; }
+.grow { flex: 1; min-width: 0; }
+select { width: 100%; padding: 12px 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--glass); }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

@@ -2,11 +2,21 @@ import express, { type Request, type Response, type NextFunction } from 'express
 import { timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { openDb, type Db } from './db.ts';
+import { createReadStream, createWriteStream, statSync, renameSync } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import { openDb, applyModuleMigrations, type Db } from './db.ts';
+import { getHouse, setHouse } from './house.ts';
+import { createStorage, checkLocalSig, localPath, drainStorageDeletes, MAX_PHOTO_BYTES } from './storage.ts';
+import { MODULES } from './modules/index.ts';
+import type { ModuleCtx } from './modules/types.ts';
+import {
+  listMembers, publicMember, getMember, updateProfile, createInvite, listInvites, revokeInvite, removeMember, type RemovalPolicy,
+} from './members.ts';
+import { clock, testClockEnabled } from './clock.ts';
 import { loadAppConfig, type AppConfig } from './config.ts';
 import { Service, HttpError, bus, consensus, consensusProgress, type RequestRow } from './service.ts';
 import {
-  signup, login, createSession, destroySession, setSessionCookie, sessionMiddleware, requireUser, requireAdmin,
+  type User, signup, login, createSession, destroySession, setSessionCookie, sessionMiddleware, requireUser, requireAdmin,
   checkCsrf, rateLimiter, readCookie, COOKIE,
 } from './auth.ts';
 import { startOutbox } from './outbox.ts';
@@ -19,10 +29,17 @@ type LaneReport = { id: string; state: 'idle' | 'working' | 'offline'; requestId
 
 export function createApp(db: Db, cfg: AppConfig) {
   const svc = new Service(db, cfg);
+  const storage = createStorage(cfg);
+  const ctx: ModuleCtx = { db, cfg, svc, bus, house: () => getHouse(db), storage };
+  applyModuleMigrations(db, MODULES.flatMap((m) => m.migrations));
   const app = express();
   const authLimit = rateLimiter(10, 15 * 60_000);
   let lanes: { at: number; lanes: LaneReport[] } = { at: 0, lanes: [] };
 
+  // Photos are read from and uploaded straight to R2 with presigned URLs.
+  const r2Origin = storage.kind === 'r2'
+    ? ` ${cfg.r2.endpoint ? new URL(cfg.r2.endpoint).origin : `https://${cfg.r2.accountId}.r2.cloudflarestorage.com`}`
+    : '';
   app.disable('x-powered-by');
   app.set('trust proxy', process.env.TRUST_PROXY === 'true');
   app.use((_req, res, next) => {
@@ -31,7 +48,7 @@ export function createApp(db: Db, cfg: AppConfig) {
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'",
+      `default-src 'self'; img-src 'self' data: blob:${r2Origin}; style-src 'self'; script-src 'self'; connect-src 'self'${r2Origin}; manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'`,
     );
     next();
   });
@@ -103,23 +120,30 @@ export function createApp(db: Db, cfg: AppConfig) {
 
   api.get('/config', (_req, res) =>
     res.json({
-      allowSignup: cfg.allowSignup,
+      inviteOnly: true,
+      needsBootstrap: !db.prepare('SELECT 1 FROM users LIMIT 1').get(),
+      houseTz: cfg.houseTz,
       pushPublicKey: pushEnabled(cfg) ? cfg.vapidPublicKey : null,
       consensus: { minUpvotes: cfg.voteMinUpvotes, ratio: cfg.consensusRatio, rejectMinDownvotes: cfg.rejectMinDownvotes },
     }),
   );
 
   const isNative = (req: Request) => req.headers['x-stall-client'] === 'native';
-  const sessionResponse = (req: Request, res: Response, user: { id: number; username: string; is_admin: number }) => {
+  const sessionResponse = (req: Request, res: Response, user: User) => {
     const { token, csrf } = createSession(db, user.id);
     if (!isNative(req)) setSessionCookie(res, token, cfg.cookieSecure);
     res.json({ user: publicUser(user), csrf, ...(isNative(req) ? { token } : {}) });
   };
 
   api.post('/auth/signup', async (req, res) => {
-    if (!cfg.allowSignup) throw new HttpError(403, 'Sign-ups are closed');
+    // Invite-only: a valid single-use invite code (or the one-time bootstrap code for the first admin).
     if (!authLimit(`signup:${req.ip}`)) throw new HttpError(429, 'Too many attempts. Try again later.');
-    const user = await signup(db, String(req.body?.username ?? ''), String(req.body?.password ?? ''));
+    const b = req.body ?? {};
+    const user = await signup(
+      db,
+      { username: String(b.username ?? ''), password: String(b.password ?? ''), code: String(b.code ?? ''), displayName: b.displayName, emoji: b.emoji },
+      cfg.bootstrapCode,
+    );
     sessionResponse(req, res, user);
   });
   api.post('/auth/login', async (req, res) => {
@@ -141,7 +165,86 @@ export function createApp(db: Db, cfg: AppConfig) {
     res.json({ user: publicUser(req.user), csrf: req.csrf, unread: svc.unreadCount(req.user.id) });
   });
 
+  // Outside cron pinger: scheduled pushes and purges for every module (Render's free plan sleeps).
+  api.post('/tick', async (req, res) => {
+    const given = req.headers.authorization?.replace(/^Bearer /, '') ?? '';
+    const want = cfg.tickToken;
+    if (!want || given.length !== want.length || !timingSafeEqual(Buffer.from(given), Buffer.from(want))) throw new HttpError(401, 'Bad tick token');
+    res.json(await runTick());
+  });
+
+  // Local-disk photo storage (no R2 configured). The HMAC signature is the capability, and
+  // reads also need a signed-in member. Lives under /api/, which the service worker never caches.
+  api.get('/blob/m/:file', (req, res) => {
+    const key = `m/${req.params.file}`;
+    if (!req.user || storage.kind !== 'local' || !checkLocalSig(cfg.mediaSecret, 'GET', key, String(req.query.exp), String(req.query.sig)))
+      throw new HttpError(403, 'Link expired');
+    let path: string;
+    try {
+      path = localPath(cfg, key);
+      statSync(path);
+    } catch {
+      throw new HttpError(404, 'Not found');
+    }
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.type(key.split('.').pop()!);
+    createReadStream(path).pipe(res);
+  });
+  api.put('/blob/m/:file', async (req, res) => {
+    const key = `m/${req.params.file}`;
+    if (!req.user || storage.kind !== 'local' || !checkLocalSig(cfg.mediaSecret, 'PUT', key, String(req.query.exp), String(req.query.sig)))
+      throw new HttpError(403, 'Upload link expired');
+    const path = localPath(cfg, key);
+    let n = 0;
+    req.on('data', (c: Buffer) => {
+      n += c.length;
+      if (n > MAX_PHOTO_BYTES) req.destroy(new Error('too big'));
+    });
+    try {
+      await pipeline(req, createWriteStream(`${path}.part`));
+      renameSync(`${path}.part`, path);
+    } catch {
+      throw new HttpError(413, 'Photo is too big');
+    }
+    res.json({ ok: true });
+  });
+
+  for (const m of MODULES) if (m.publicRoutes) api.use('/public', m.publicRoutes(ctx));
+
   api.use(requireUser);
+
+  // ---------------- members, profiles, invites, house settings ----------------
+  api.get('/members', (_req, res) => res.json({ members: listMembers(db).map(publicMember) }));
+  api.patch('/me', (req, res) => {
+    const m = updateProfile(db, req.user!.id, req.body?.displayName, req.body?.emoji);
+    res.json({ user: publicUser({ ...req.user!, display_name: m.display_name, emoji: m.emoji }) });
+  });
+  api.get('/house', (_req, res) => res.json({ house: getHouse(db), tz: cfg.houseTz }));
+  api.patch('/admin/house', requireAdmin, (req, res) => res.json({ house: setHouse(db, req.body ?? {}) }));
+  api.get('/admin/invites', requireAdmin, (_req, res) => res.json({ invites: listInvites(db) }));
+  api.post('/admin/invites', requireAdmin, (req, res) => {
+    const inv = createInvite(db, req.user!.id, req.body?.note, req.body?.ttlDays);
+    res.status(201).json({ invite: { ...inv, link: `${cfg.publicUrl.replace(/\/$/, '')}/#/join?code=${encodeURIComponent(inv.code)}` } });
+  });
+  api.post('/admin/invites/:id/revoke', requireAdmin, (req, res) => {
+    revokeInvite(db, id(req));
+    res.json({ ok: true });
+  });
+  api.post('/admin/members/:id/remove', requireAdmin, (req, res) => {
+    removeMember(ctx, req.user!.id, id(req), String(req.body?.policy ?? '') as RemovalPolicy);
+    bus.emit('board');
+    res.json({ ok: true });
+  });
+  if (testClockEnabled()) {
+    api.post('/test/clock', (req, res) => {
+      if (typeof req.body?.set === 'number') clock.set(req.body.set);
+      if (typeof req.body?.advanceMs === 'number') clock.advance(req.body.advanceMs);
+      res.json({ now: clock.iso() });
+    });
+  }
+
+  // ---------------- feature modules (events, posts, photos, night...) ----------------
+  for (const m of MODULES) if (m.routes) api.use(m.routes(ctx));
 
   const view = (r: RequestRow, viewerId: number, myVote?: number) => ({
     id: r.id,
@@ -196,9 +299,10 @@ export function createApp(db: Db, cfg: AppConfig) {
     svc.markRead(u.id, r.id);
     res.json({
       request: { ...view(r, u.id, svc.myVote(r.id, u.id)), queuePosition: svc.queuePosition(r.id) },
+      // Members see Claude's questions and the timeline only on their own suggestion.
       messages: svc
         .messages(r.id)
-        .filter((m) => !m.admin_only || u.is_admin)
+        .filter((m) => (r.user_id === u.id || u.is_admin) && (!m.admin_only || u.is_admin))
         .map((m) => ({
           id: m.id, author: m.author, username: m.username, kind: m.kind, body: m.body, adminOnly: !!m.admin_only, createdAt: m.created_at,
         })),
@@ -263,7 +367,7 @@ export function createApp(db: Db, cfg: AppConfig) {
     res.json({ ok: true });
   });
 
-  api.get('/board', (req, res) => {
+  api.get('/board', requireAdmin, (req, res) => {
     const u = req.user!;
     const stale = Date.now() - lanes.at > 90_000;
     const active = svc.listRequests({ statuses: ACTIVE_STATUSES, order: 'queue' });
@@ -319,27 +423,35 @@ export function createApp(db: Db, cfg: AppConfig) {
         send('board', {});
       }, 250);
     };
+    // Module live updates: ctx.bus.emit('live', { topic: 'feed' }) (or the 'feed' shorthand).
+    const onLive = (d: unknown) => send('live', { topic: String((d as { topic?: string })?.topic ?? 'board') });
+    const onFeed = () => send('live', { topic: 'feed' });
     bus.on(`user:${u.id}`, onUser);
     bus.on('board', onBoard);
+    bus.on('live', onLive);
+    bus.on('feed', onFeed);
     const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
     req.on('close', () => {
       clearInterval(ping);
       clearTimeout(boardTimer);
       bus.off(`user:${u.id}`, onUser);
       bus.off('board', onBoard);
+      bus.off('live', onLive);
+      bus.off('feed', onFeed);
     });
   });
 
   api.get('/admin/users', requireAdmin, (_req, res) => {
-    res.json({ users: db.prepare('SELECT id, username, is_admin, created_at FROM users ORDER BY id').all() });
+    res.json({ users: db.prepare('SELECT id, username, display_name, emoji, is_admin, created_at FROM users WHERE removed_at IS NULL ORDER BY id').all() });
   });
   api.post('/admin/users/:id/admin', requireAdmin, (req, res) => {
     const target = id(req);
     const makeAdmin = Boolean(req.body?.isAdmin);
     if (!makeAdmin) {
-      const admins = (db.prepare('SELECT COUNT(*) AS n FROM users WHERE is_admin = 1').get() as { n: number }).n;
+      const admins = (db.prepare('SELECT COUNT(*) AS n FROM users WHERE is_admin = 1 AND removed_at IS NULL').get() as { n: number }).n;
       if (admins <= 1 && target === req.user!.id) throw new HttpError(409, 'You are the last admin');
     }
+    if (!getMember(db, target)) throw new HttpError(404, 'No such member');
     db.prepare('UPDATE users SET is_admin = ? WHERE id = ?').run(makeAdmin ? 1 : 0, target);
     res.json({ ok: true });
   });
@@ -359,11 +471,27 @@ export function createApp(db: Db, cfg: AppConfig) {
     res.status(500).json({ error: 'Something went wrong' });
   });
 
-  return { app, svc, consensus };
+  async function runTick() {
+    const ran: Record<string, string> = {};
+    for (const m of MODULES) {
+      if (!m.tick) continue;
+      try {
+        await m.tick(ctx);
+        ran[m.name] = 'ok';
+      } catch (e) {
+        console.error(`[stall] tick ${m.name} failed`, e);
+        ran[m.name] = 'failed';
+      }
+    }
+    await drainStorageDeletes(db, storage);
+    return { now: clock.iso(), modules: ran };
+  }
+
+  return { app, svc, consensus, ctx, runTick };
 }
 
-function publicUser(u: { id: number; username: string; is_admin: number }) {
-  return { id: u.id, username: u.username, isAdmin: !!u.is_admin };
+function publicUser(u: User) {
+  return { id: u.id, username: u.username, name: u.display_name || u.username, emoji: u.emoji || '🙂', isAdmin: !!u.is_admin };
 }
 
 function id(req: Request): number {
@@ -382,7 +510,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const db = openDb(cfg.dbPath, cfg.tursoUrl ? { url: cfg.tursoUrl, authToken: cfg.tursoToken } : undefined);
   console.log(`[stall] database: ${cfg.tursoUrl ? 'Turso (hosted)' : cfg.dbPath}`);
   ensureVapidKeys(db, cfg);
-  const { app } = createApp(db, cfg);
+  const { app, runTick } = createApp(db, cfg);
+  // While awake, run module housekeeping every minute; the outside pinger covers sleep.
+  setInterval(() => void runTick().catch((e) => console.error('[stall] tick', e)), 60_000).unref();
   startOutbox(db, cfg);
   startPush(db, cfg);
   app.listen(cfg.port, () => console.log(`[stall] app listening on ${cfg.publicUrl}`));

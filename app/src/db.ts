@@ -4,6 +4,7 @@
 import Database from 'libsql';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { clock } from './clock.ts';
 
 type Params = (string | number | null | bigint | Uint8Array)[];
 export interface Db {
@@ -105,6 +106,68 @@ const MIGRATIONS: string[] = [
   `
   CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
   `,
+  // ---- Foundation (core): invite-only membership, profiles, and the shared tables every
+  // module builds on. Module tables live in app/src/modules/<name> (see docs/ARCHITECTURE.md).
+  `
+  ALTER TABLE users ADD COLUMN display_name TEXT;
+  ALTER TABLE users ADD COLUMN emoji TEXT;
+  ALTER TABLE users ADD COLUMN removed_at TEXT;
+  CREATE TABLE invites (
+    id INTEGER PRIMARY KEY,
+    code_hash TEXT NOT NULL UNIQUE,      -- sha256(code); the code is shown once, to the admin who made it
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    note TEXT,
+    expires_at TEXT NOT NULL,
+    used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    used_at TEXT,
+    revoked_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  );
+  ALTER TABLE notifications ADD COLUMN link TEXT;
+  -- General yes/no group votes (plus-ones, court, hot takes, unmask...). Same consensus rule as the feature board.
+  CREATE TABLE ballots (
+    subject_type TEXT NOT NULL,
+    subject_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    value INTEGER NOT NULL CHECK (value IN (-1, 1)),
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (subject_type, subject_id, user_id)
+  );
+  CREATE INDEX ballots_user ON ballots(user_id);
+  -- Emoji reactions on anything (post, photo, caption...).
+  CREATE TABLE reactions (
+    target_type TEXT NOT NULL,
+    target_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    emoji TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    PRIMARY KEY (target_type, target_id, user_id, emoji)
+  );
+  CREATE INDEX reactions_user ON reactions(user_id);
+  -- Announcements for the Feed ("Jess went from In → Maybe (lying)", "the roll is developed").
+  CREATE TABLE feed_items (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    actor_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    event_id INTEGER,                    -- no FK: events is a module table
+    subject_type TEXT,
+    subject_id INTEGER,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX feed_items_created ON feed_items(created_at);
+  CREATE INDEX feed_items_event ON feed_items(event_id);
+  CREATE INDEX feed_items_actor ON feed_items(actor_id);
+  -- Idempotency for scheduled pushes sent from /api/v1/tick.
+  CREATE TABLE jobs_sent (key TEXT PRIMARY KEY, sent_at TEXT NOT NULL);
+  -- Stored files waiting to be deleted (veto, expiry, removal). Retried by the tick until gone.
+  CREATE TABLE storage_deletes (
+    storage_key TEXT PRIMARY KEY,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT
+  );
+  CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
+  `,
 ];
 
 export function openDb(path: string, remote?: { url: string; authToken?: string }): Db {
@@ -131,6 +194,23 @@ export function openDb(path: string, remote?: { url: string; authToken?: string 
   return db;
 }
 
+/**
+ * Apply module migrations (app/src/modules/<name>/index.ts) once each, by id, in
+ * registry order. Ids are strings like 'events-001', so lanes never collide on numbers.
+ */
+export function applyModuleMigrations(db: Db, migrations: { id: string; sql: string }[]) {
+  const seen = new Set<string>();
+  for (const m of migrations) {
+    if (seen.has(m.id)) throw new Error(`Duplicate migration id ${m.id}`);
+    seen.add(m.id);
+    if (db.prepare('SELECT 1 FROM schema_migrations WHERE id = ?').get(m.id)) continue;
+    tx(db, () => {
+      db.exec(m.sql);
+      db.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)').run(m.id, now());
+    });
+  }
+}
+
 /** Run fn inside a transaction (nested calls join the outer one). */
 let depth = 0;
 export function tx<T>(db: Db, fn: () => T): T {
@@ -149,4 +229,5 @@ export function tx<T>(db: Db, fn: () => T): T {
   }
 }
 
-export const now = () => new Date().toISOString();
+/** Current server time as an ISO string (goes through the testable clock). */
+export const now = () => clock.iso();
