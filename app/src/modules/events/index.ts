@@ -2,7 +2,7 @@
 // public guest-link endpoint, and the tick hook for time-based pushes and purges.
 import express, { type Request } from 'express';
 import { HttpError } from '../../service.ts';
-import type { ModuleContext, StallModule } from '../types.ts';
+import type { ModuleCtx as ModuleContext, StallModule } from '../types.ts';
 import { EVENTS_MIGRATIONS } from './schema.ts';
 import { EventsService, RSVP } from './service.ts';
 
@@ -27,7 +27,10 @@ function routes(ctx: ModuleContext) {
   const ev = svcFor(ctx);
   const r = express.Router();
 
-  r.get('/events/meta', (_req, res) => res.json({ rsvp: RSVP, house: { plusOneVoteMinutes: ctx.house?.plusOneVoteMinutes ?? 60, locationRevealHours: ctx.house?.locationRevealHours ?? 2 } }));
+  r.get('/events/meta', (_req, res) => {
+    const house = ctx.house();
+    res.json({ rsvp: RSVP, house: { plusOneVoteMinutes: house.plusOneVoteMinutes, locationRevealHours: house.locationRevealHours } });
+  });
   r.get('/events', (req, res) => res.json({ events: ev.list(viewer(req), String(req.query.scope ?? 'upcoming')) }));
   r.post('/events', (req, res) => {
     const id = ev.create(viewer(req).id, req.body ?? {});

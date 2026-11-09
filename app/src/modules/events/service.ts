@@ -8,7 +8,7 @@
 import { randomBytes } from 'node:crypto';
 import { type Db, tx, now } from '../../db.ts';
 import { HttpError, consensus } from '../../service.ts';
-import type { ModuleContext } from '../types.ts';
+import type { ModuleCtx as ModuleContext } from '../types.ts';
 
 export const RSVP = {
   in: { label: 'In', emoji: '🙋' },
@@ -85,7 +85,7 @@ export class EventsService {
 
   /** Admin house settings, with the plan's defaults if a key is missing. */
   private house() {
-    const h = (this.ctx.house ?? {}) as Record<string, unknown>;
+    const h = (typeof this.ctx.house === 'function' ? this.ctx.house() : {}) as Record<string, unknown>;
     const num = (k: string, d: number) => (typeof h[k] === 'number' && Number.isFinite(h[k]) ? (h[k] as number) : d);
     return {
       locationRevealHours: num('locationRevealHours', 2),
@@ -112,17 +112,21 @@ export class EventsService {
 
   private feed(eventId: number, actorId: number | null, kind: string, body: string, subject?: { type: string; id: number }) {
     this.db
-      .prepare('INSERT INTO feed_items (kind, actor_id, event_id, subject_type, subject_id, body) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(kind, actorId, eventId, subject?.type ?? 'event', subject?.id ?? eventId, body);
+      .prepare('INSERT INTO feed_items (kind, actor_id, event_id, subject_type, subject_id, body, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(kind, actorId, eventId, subject?.type ?? 'event', subject?.id ?? eventId, body, now());
     queueMicrotask(() => {
       this.ctx.bus.emit(`event:${eventId}`);
       this.ctx.bus.emit('feed');
+      this.ctx.bus.emit('board');
     });
   }
 
   private touch(eventId: number) {
     this.db.prepare('UPDATE events SET updated_at = ? WHERE id = ?').run(now(), eventId);
-    queueMicrotask(() => this.ctx.bus.emit(`event:${eventId}`));
+    queueMicrotask(() => {
+      this.ctx.bus.emit(`event:${eventId}`);
+      this.ctx.bus.emit('board');
+    });
   }
 
   private row(id: number): EventRow | undefined {
@@ -153,7 +157,7 @@ export class EventsService {
     const details = optText(input.details, 4000);
     const location = optText(input.location, 300);
     const spontaneous = kind === 'spontaneous';
-    const t = Date.now();
+    const t = Date.parse(now());
     const house = this.house();
 
     const startsAt = spontaneous ? new Date(t) : date(input.startsAt, 'Start time');
@@ -440,7 +444,7 @@ export class EventsService {
     const ig = optText(input.instagram, 60)?.replace(/^@/, '') ?? null;
     if (ig && !/^[A-Za-z0-9._]{1,30}$/.test(ig)) throw new HttpError(400, 'That doesn’t look like an Instagram handle');
     const pitch = optText(input.pitch, 200);
-    const decides = new Date(Date.now() + e.plus_one_minutes * 60_000).toISOString();
+    const decides = new Date(Date.parse(now()) + e.plus_one_minutes * 60_000).toISOString();
     const id = tx(this.db, () => {
       const res = this.db
         .prepare('INSERT INTO plus_ones (event_id, requester_id, guest_name, guest_instagram, pitch, decides_at) VALUES (?, ?, ?, ?, ?, ?)')
@@ -605,7 +609,7 @@ export class EventsService {
     const t = now();
     const where =
       scope === 'past'
-        ? `AND COALESCE(e.ends_at, datetime(e.real_starts_at, '+8 hours')) < ?`
+        ? `AND COALESCE(e.ends_at, strftime('%Y-%m-%dT%H:%M:%fZ', e.real_starts_at, '+8 hours')) < ?`
         : `AND COALESCE(e.ends_at, strftime('%Y-%m-%dT%H:%M:%fZ', e.real_starts_at, '+8 hours')) >= ?`;
     const order = scope === 'past' ? 'e.starts_at DESC LIMIT 100' : 'e.starts_at ASC LIMIT 100';
     const rows = this.db
@@ -787,11 +791,13 @@ export class EventsService {
       liars,
       flipFlopper: flipFlops && flipFlops.n >= 2 ? flipFlops : null,
       // Other modules' contributions, by event id. null = that module isn't installed.
-      photos: count('media', `AND vetoed_at IS NULL`) ?? count('photos'),
+      photos: count('photos', `AND status = 'ready'`),
       quotes: count('posts', `AND kind = 'quote'`),
-      regrets: count('posts', `AND kind = 'regret'`),
-      irishGoodbyes: count('irish_goodbyes'),
-      tab: count('ledger'),
+      regrets: count('posts', `AND kind = 'regret' AND (expires_at IS NULL OR expires_at > '${now()}')`),
+      irishGoodbyesPosts: count('posts', `AND kind = 'irish_goodbye'`),
+      irishGoodbyes: count('irish_goodbyes') ?? null,
+      tab: count('tab_expenses', 'AND deleted_at IS NULL'),
+      checkins: count('night_checkins'),
     };
   }
 
@@ -810,9 +816,9 @@ export class EventsService {
   tick() {
     this.sweep();
     this.resolvePlusOnes();
-    const t = Date.now();
+    const t = Date.parse(now());
     const once = (key: string) => {
-      const res = this.db.prepare('INSERT OR IGNORE INTO jobs_sent (key) VALUES (?)').run(key);
+      const res = this.db.prepare('INSERT OR IGNORE INTO jobs_sent (key, sent_at) VALUES (?, ?)').run(key, now());
       return res.changes === 1;
     };
     // Location drops that just happened.
@@ -882,7 +888,7 @@ export class EventsService {
 
 // ------------------------------------------------------------ pure rules
 
-export function phase(e: Pick<EventRow, 'starts_at' | 'real_starts_at' | 'ends_at' | 'cancelled_at' | 'kind' | 'expires_at'>, at = Date.now()) {
+export function phase(e: Pick<EventRow, 'starts_at' | 'real_starts_at' | 'ends_at' | 'cancelled_at' | 'kind' | 'expires_at'>, at = Date.parse(now())) {
   if (e.cancelled_at) return 'cancelled' as const;
   const start = Date.parse(e.starts_at);
   const end = e.ends_at ? Date.parse(e.ends_at) : Date.parse(e.real_starts_at) + 8 * 3600_000;
@@ -891,12 +897,12 @@ export function phase(e: Pick<EventRow, 'starts_at' | 'real_starts_at' | 'ends_a
   return e.kind === 'spontaneous' ? ('live' as const) : ('archived' as const);
 }
 
-function isExpired(e: Pick<EventRow, 'expires_at'>, at = Date.now()) {
+function isExpired(e: Pick<EventRow, 'expires_at'>, at = Date.parse(now())) {
   return !!e.expires_at && Date.parse(e.expires_at) <= at;
 }
 
 /** Location drop, decided at read time. The host (and admins) always see it. */
-export function locationFor(e: Pick<EventRow, 'location' | 'location_reveal_at' | 'host_id'>, v: Viewer | null, at = Date.now()) {
+export function locationFor(e: Pick<EventRow, 'location' | 'location_reveal_at' | 'host_id'>, v: Viewer | null, at = Date.parse(now())) {
   if (!e.location) return null;
   if (v && (v.id === e.host_id || v.is_admin)) return e.location;
   if (e.location_reveal_at && Date.parse(e.location_reveal_at) > at) return null;

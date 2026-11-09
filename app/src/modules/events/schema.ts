@@ -1,9 +1,9 @@
 // Events module schema. Append-only named migrations, tracked in schema_migrations.
 // Announcements (RSVP changes, plus-one verdicts, claims) go to core feed_items;
 // plus-one votes go to core ballots with subject_type 'plus_one'.
-import type { NamedMigration } from '../types.ts';
+import type { StallModule } from '../types.ts';
 
-export const EVENTS_MIGRATIONS: NamedMigration[] = [
+export const EVENTS_MIGRATIONS: StallModule['migrations'] = [
   {
     id: 'events-001',
     sql: `
