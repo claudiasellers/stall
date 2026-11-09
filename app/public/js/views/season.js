@@ -163,8 +163,8 @@ route('/season/trips/:id', async ({ id }, alive) => {
     if (!alive()) return;
     const b = t.bible || {};
     const bibleForm = h('form', { class: 'stack', onsubmit: async (ev) => { ev.preventDefault(); await act(`/season/trips/${id}/bible`, Object.fromEntries(new FormData(bibleForm)), 'PUT'); toast('Bible saved'); load(); } },
-      [['flights', '✈️ Flights (who lands when)'], ['house', '🏠 The house'], ['packing', '🧳 Packing list'], ['itinerary', '🗺️ Itinerary'], ['reservations', '🍽️ Reservations']].map(([k, l]) =>
-        h('label', { class: 'field' }, l, h('textarea', { name: k, rows: 3, maxlength: 8000 }, b[k] || ''))),
+      [['flights', '✈️ Flights (who lands when)', 4000], ['house', '🏠 The house', 2000], ['packing', '🧳 Packing list', 4000], ['itinerary', '🗺️ Itinerary', 8000], ['reservations', '🍽️ Reservations', 4000]].map(([k, l, max]) =>
+        h('label', { class: 'field' }, l, h('textarea', { name: k, rows: 3, maxlength: max }, b[k] || ''))),
       h('div', { class: 'row-between' }, h('span', { class: 'small muted' }, b.editor ? `Last edit: ${b.editor}, ${ago(b.updated_at)}` : ''), h('button', { class: 'btn sm hot', type: 'submit' }, 'Save')));
     const roomLabel = h('input', { maxlength: 60, placeholder: 'Primary suite' });
     const roomBeds = h('input', { type: 'number', min: 1, max: 8, value: 2, class: 'ev-num' });
@@ -213,7 +213,7 @@ route('/season/games/:id', async ({ id }, alive) => {
     const { game: g, talk, squares } = await api(`/season/games/${id}`);
     if (!alive()) return;
     const talkInput = h('input', { maxlength: 500, placeholder: g.locked ? 'Gloat.' : 'Trash talk' });
-    const hs = h('input', { type: 'number', min: 0, class: 'ev-num', placeholder: g.home }), as = h('input', { type: 'number', min: 0, class: 'ev-num', placeholder: g.away });
+    const hs = h('input', { type: 'number', min: 0, required: true, class: 'ev-num', placeholder: g.home }), as = h('input', { type: 'number', min: 0, required: true, class: 'ev-num', placeholder: g.away });
     let grid = null;
     if (squares) {
       const cell = (r, c) => squares.cells.find((x) => x.r === r && x.c === c);
@@ -232,7 +232,7 @@ route('/season/games/:id', async ({ id }, alive) => {
       card(sec(g.locked ? '🔒 Picks' : 'Your pick'),
         g.locked ? null : h('div', { class: 'ev-actions' }, [g.away, g.home].map((t) => h('button', { class: `btn ${g.myPick === t ? 'hot' : 'ghost'}`, onclick: async () => { await act(`/season/games/${id}/pick`, { team: t }); load(); } }, t))),
         h('p', { class: 'small muted' }, g.locked ? g.picks.map((p) => `${p.name}: ${p.team}`).join(' · ') || 'No picks.' : `${g.pickCount} picked. Picks stay hidden until kickoff.`),
-        g.locked && !g.final ? h('form', { class: 'ev-chip-add', onsubmit: async (ev) => { ev.preventDefault(); await act(`/season/games/${id}/score`, { homeScore: Number(hs.value), awayScore: Number(as.value) }); load(); } }, as, hs, h('button', { class: 'btn sm ghost', type: 'submit' }, 'Final score')) : null),
+        g.locked && !g.final ? h('form', { class: 'ev-chip-add', onsubmit: async (ev) => { ev.preventDefault(); if (hs.value === '' || as.value === '') { toast('Enter both scores'); return; } if (!confirm(`Final: ${g.away} ${as.value}, ${g.home} ${hs.value}?`)) return; await act(`/season/games/${id}/score`, { homeScore: Number(hs.value), awayScore: Number(as.value) }); load(); } }, as, hs, h('button', { class: 'btn sm ghost', type: 'submit' }, 'Final score')) : null),
       card(sec('🔢 Squares', squares ? h('span', { class: 'small muted' }, squares.locked ? 'Locked' : `You have ${squares.mine}`) : h('button', { class: 'btn sm ghost', onclick: async () => { await act(`/season/games/${id}/squares`); load(); } }, 'Open a board')),
         grid,
         squares?.winner ? h('p', {}, `🏆 Winning square: ${squares.winner.name}`) : null,

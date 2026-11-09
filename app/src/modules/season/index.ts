@@ -218,6 +218,9 @@ function routes(ctx: ModuleCtx) {
     const u = me(req);
     const eid = event(id(req.params.id)).id;
     const b = req.body ?? {};
+    const limits: Record<string, number> = { flights: 4000, house: 2000, packing: 4000, itinerary: 8000, reservations: 4000 };
+    for (const [k, max] of Object.entries(limits))
+      if (typeof b[k] === 'string' && b[k].trim().length > max) throw new HttpError(400, `${k} is too long (max ${max} characters)`);
     db.prepare(
       `INSERT INTO trip_bibles (event_id, flights, house, packing, itinerary, reservations, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (event_id) DO UPDATE SET flights = excluded.flights, house = excluded.house, packing = excluded.packing,
@@ -477,7 +480,8 @@ function routes(ctx: ModuleCtx) {
     const s = (v: unknown) => (Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= 5 ? Number(v) : null);
     db.prepare(
       `INSERT INTO bar_ratings (bar_id, user_id, sound, wings, lines, note, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT (bar_id, user_id) DO UPDATE SET sound = excluded.sound, wings = excluded.wings, lines = excluded.lines, note = excluded.note, updated_at = excluded.updated_at`,
+       ON CONFLICT (bar_id, user_id) DO UPDATE SET sound = COALESCE(excluded.sound, bar_ratings.sound), wings = COALESCE(excluded.wings, bar_ratings.wings),
+         lines = COALESCE(excluded.lines, bar_ratings.lines), note = COALESCE(excluded.note, bar_ratings.note), updated_at = excluded.updated_at`,
     ).run(bid, u.id, s(req.body?.sound), s(req.body?.wings), s(req.body?.lines), opt(req.body?.note, 200), now());
     res.json({ ok: true });
   });
