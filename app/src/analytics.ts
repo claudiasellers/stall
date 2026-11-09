@@ -104,6 +104,7 @@ let cfg: AnalyticsConfig | null = null;
 let queue: MpEvent[] = [];
 let timer: NodeJS.Timeout | null = null;
 let inflight: Promise<void> = Promise.resolve();
+let sending = false;
 const lastAppOpen = new Map<number, number>();
 
 /** Call once at startup. Safe to call with no Mixpanel settings: analytics stays off. */
@@ -189,27 +190,35 @@ export function trackAppOpen(userId: number, client: 'web' | 'native'): void {
   track('app_opened', userId, { client });
 }
 
-/** Sends everything queued. Failed batches are dropped, not retried, to keep the free server light. */
+/**
+ * Sends everything queued, one batch at a time. Unsent events stay in the bounded queue
+ * while a send is in flight, so a slow or down Mixpanel can't grow memory past MAX_QUEUE.
+ * Failed batches are dropped, not retried, to keep the free server light.
+ */
 export function flushAnalytics(): Promise<void> {
-  if (!cfg || queue.length === 0) return inflight;
+  if (!cfg || sending || queue.length === 0) return inflight;
   const c = cfg;
-  const batches: MpEvent[][] = [];
-  while (queue.length) batches.push(queue.splice(0, MAX_BATCH));
-  inflight = inflight.then(async () => {
-    for (const batch of batches) {
-      try {
-        const res = await fetch(`${c.apiHost}/track?ip=0&verbose=1`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify(batch),
-          signal: AbortSignal.timeout(5_000),
-        });
-        if (!res.ok) console.warn(`[stall] analytics: Mixpanel returned ${res.status}, dropped ${batch.length} events`);
-      } catch (err) {
-        console.warn(`[stall] analytics: send failed (${(err as Error).name}), dropped ${batch.length} events`);
+  sending = true;
+  inflight = (async () => {
+    try {
+      while (queue.length) {
+        const batch = queue.splice(0, MAX_BATCH);
+        try {
+          const res = await fetch(`${c.apiHost}/track?ip=0&verbose=1`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify(batch),
+            signal: AbortSignal.timeout(5_000),
+          });
+          if (!res.ok) console.warn(`[stall] analytics: Mixpanel returned ${res.status}, dropped ${batch.length} events`);
+        } catch (err) {
+          console.warn(`[stall] analytics: send failed (${(err as Error).name}), dropped ${batch.length} events`);
+        }
       }
+    } finally {
+      sending = false;
     }
-  });
+  })();
   return inflight;
 }
 

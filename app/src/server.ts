@@ -302,6 +302,7 @@ export function createApp(db: Db, cfg: AppConfig) {
   api.post('/requests', (req, res) => {
     const r = svc.createRequest(req.user!.id, String(req.body?.title ?? ''), String(req.body?.description ?? ''));
     track('feature_suggested', req.user!.id);
+    if (r.status === 'queued') track('feature_approved', null, { by: 'consensus' }); // VOTE_MIN_UPVOTES 0 or 1
     res.status(201).json({ request: view(r, req.user!.id, 1) });
   });
 
