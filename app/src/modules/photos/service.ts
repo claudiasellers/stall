@@ -413,6 +413,37 @@ export class Photos {
     return { vetoes: rows };
   }
 
+  /**
+   * Admin moderation list, newest first. Undeveloped photos are listed with
+   * thumbUrl null: admins can delete them, but the disposable-camera rule (nobody
+   * sees a roll before it develops) holds for admins too.
+   */
+  async adminList(isAdmin: boolean, before?: string, limit = 50) {
+    if (!isAdmin) throw new HttpError(403, 'Admins only');
+    const rows = this.db.prepare(
+      `SELECT p.*, COALESCE(u.display_name, u.username) AS uploader_name, e.title AS event_title
+       FROM photos p JOIN users u ON u.id = p.uploader_id LEFT JOIN events e ON e.id = p.event_id
+       WHERE p.status = 'ready' AND p.created_at < ? ORDER BY p.created_at DESC LIMIT ?`,
+    ).all(before || '9999', Math.min(Math.max(1, limit), 100)) as (PhotoRow & { uploader_name: string; event_title: string | null })[];
+    const t = clock.now();
+    const photos = [];
+    for (const p of rows) {
+      let developed = false;
+      try { developed = this.isDeveloped(this.rollOf(p), t); } catch { /* event vanished mid-query */ }
+      photos.push({
+        id: p.id,
+        uploader: p.uploader_name,
+        eventTitle: p.event_title,
+        night: p.night,
+        takenAt: p.taken_at,
+        createdAt: p.created_at,
+        developed,
+        thumbUrl: developed ? await this.ctx.storage.readUrl(p.thumb_key) : null,
+      });
+    }
+    return { photos };
+  }
+
   /** Wrapped hook: photos shot and vetoed by a member in a year. */
   stats(userId: number, year: string) {
     const shot = (this.db.prepare(`SELECT COUNT(*) AS n FROM photos WHERE uploader_id = ? AND status = 'ready' AND substr(night, 1, 4) = ?`).get(userId, year) as { n: number }).n;

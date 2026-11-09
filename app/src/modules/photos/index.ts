@@ -65,6 +65,8 @@ function routes(ctx: ModuleCtx) {
   r.delete('/photos/captions/:cid', (req, res) => res.json(photos.deleteCaption(num(req.params.cid), uid(req), !!req.user!.is_admin)));
 
   // Admin moderation (the service checks is_admin)
+  r.get('/admin/photos', async (req, res) =>
+    res.json(await photos.adminList(!!req.user!.is_admin, typeof req.query.before === 'string' ? req.query.before : undefined, Number(req.query.limit) || 50)));
   r.get('/admin/vetoes', (req, res) =>
     res.json(photos.vetoLog(!!req.user!.is_admin, typeof req.query.before === 'string' ? req.query.before : undefined, Number(req.query.limit) || 50)));
 

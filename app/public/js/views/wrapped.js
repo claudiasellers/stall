@@ -36,11 +36,14 @@ function story(data, onClose) {
     h('button', { class: 'wr-tap prev', type: 'button', 'aria-label': 'Previous', onclick: () => show(i - 1) }),
     h('button', { class: 'wr-tap next', type: 'button', 'aria-label': 'Next', onclick: () => (i === cards.length - 1 ? (clearTimeout(timer), onClose()) : show(i + 1)) }),
   );
+  // Navigating away (Back, a push link) dismisses the story; it lives outside #app.
+  const onNav = () => { clearTimeout(timer); window.removeEventListener('hashchange', onNav); onClose(); };
+  window.addEventListener('hashchange', onNav);
   const onKey = (e) => {
-    if (!root.isConnected) return document.removeEventListener('keydown', onKey);
+    if (!root.isConnected) { window.removeEventListener('hashchange', onNav); return document.removeEventListener('keydown', onKey); }
     if (e.key === 'ArrowRight') show(i + 1);
     else if (e.key === 'ArrowLeft') show(i - 1);
-    else if (e.key === 'Escape') onClose();
+    else if (e.key === 'Escape') { clearTimeout(timer); onClose(); }
   };
   document.addEventListener('keydown', onKey);
   show(0);
@@ -52,7 +55,7 @@ async function wrappedView({ year }) {
   const data = await api(`/wrapped${y ? `?year=${y}` : ''}`);
   const open = () => {
     if (!data.cards.length) return toast('Nothing to wrap yet. Go out.');
-    const s = story(data, () => s.remove());
+    const s = story(data, () => s.isConnected && s.remove());
     document.body.append(s);
   };
   const thisYear = new Date().getFullYear();
