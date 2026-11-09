@@ -645,7 +645,7 @@ export class PostsService {
     // Only after 11am house time, once per day (jobs_sent dedupes across restarts and instances).
     const hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: this.tz, hour: 'numeric', hourCycle: 'h23' }).format(new Date(now())));
     if (hour < 11) return;
-    const claimed = this.db.prepare('INSERT OR IGNORE INTO jobs_sent (key) VALUES (?)').run(key);
+    const claimed = this.db.prepare('INSERT OR IGNORE INTO jobs_sent (key, sent_at) VALUES (?, ?)').run(key, now());
     if (!claimed.changes) return;
     const weekAgo = new Date(Date.parse(now()) - 7 * 86400_000).toISOString();
     const q =
@@ -839,7 +839,7 @@ export function routes(ctx: Ctx) {
 
   // Generic reactions for other modules' targets (photos, events...). Posts use /posts/:id/react
   // so absolution runs. The owning module is responsible for visibility of its targets.
-  const REACTABLE = new Set(['photo', 'caption', 'event', 'feed_item']);
+  const REACTABLE = new Set(['photo', 'caption', 'event', 'feed_item', 'canon']);
   r.post('/reactions', (req, res) => {
     const type = String(req.body?.targetType ?? '');
     const targetId = pid(req.body?.targetId);
