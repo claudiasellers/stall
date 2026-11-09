@@ -88,5 +88,12 @@ export function nightRoutes(night: NightService) {
   r.post('/tab/settlements', (req, res) => res.status(201).json(night.settle(uid(req), req.body ?? {})));
   r.post('/tab/venmo', (req, res) => res.json(night.setVenmo(uid(req), req.body?.venmo)));
 
+  // ---- Wager Book (settles into The Tab)
+  r.get('/wagers', (req, res) => res.json({ wagers: night.wagers(uid(req), { eventId: eventQ(req), ...page(req) }) }));
+  r.post('/wagers', (req, res) => res.status(201).json({ wager: night.createWager(uid(req), req.body ?? {}) }));
+  r.post('/wagers/:id/bet', (req, res) => res.json({ wager: night.bet(pid(req), uid(req), req.body?.side) }));
+  r.delete('/wagers/:id/bet', (req, res) => res.json({ wager: night.unbet(pid(req), uid(req)) }));
+  r.post('/wagers/:id/settle', (req, res) => res.json({ wager: night.settleWager(pid(req), uid(req), !!req.user!.is_admin, req.body?.winner) }));
+
   return r;
 }

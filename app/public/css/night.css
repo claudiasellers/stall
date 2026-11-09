@@ -56,3 +56,10 @@ input[type=range] { width: 100%; accent-color: var(--pink); }
 .draft { margin: 4px 0; padding: 10px 12px; border-left: 3px solid var(--pink); background: var(--glass); border-radius: 0 12px 12px 0; white-space: pre-wrap; }
 .night-form textarea { background: var(--glass); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; resize: vertical; }
 .rideshare { display: grid; gap: 6px; margin: 8px 0; }
+.roster { margin: 8px 0; }
+.roster select.inline { margin-left: 6px; padding: 4px 8px; font-size: 13px; }
+.mod { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 8px; }
+.mod-row { display: grid; grid-template-columns: 28px 1fr; gap: 6px 10px; align-items: start; }
+.mod-row > .row-wrap { grid-column: 2; }
+.btn.danger { color: var(--red); }
+.mod-thumb { width: 28px; height: 28px; object-fit: cover; border-radius: 6px; }
