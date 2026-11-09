@@ -45,6 +45,8 @@ start('app', 'app/src/server.ts', {
   VOTE_MIN_UPVOTES: '2',
   CONSENSUS_RATIO: '0.6',
   REJECT_MIN_DOWNVOTES: '2',
+  STALL_BOOTSTRAP_CODE: 'bootstrap-e2e',
+  STALL_MEDIA_DIR: join(tmp, 'media'),
 });
 await waitFor(async () => (await fetch(`${base}/api/v1/config`)).ok, 'app up');
 
@@ -83,12 +85,20 @@ class Client {
   }
 }
 const alice = new Client(), bob = new Client(), carol = new Client();
-const a = await alice.call('POST', '/auth/signup', { username: 'alice', password: 'password123' });
-assert.equal(a.user.isAdmin, true, 'first user is admin');
-const b = await bob.call('POST', '/auth/signup', { username: 'bob', password: 'password123' });
+// Invite-only: no code, no account; the first admin needs the bootstrap code.
+await new Client().call('POST', '/auth/signup', { username: 'alice', password: 'password123', code: 'wrong' }, 403);
+const a = await alice.call('POST', '/auth/signup', { username: 'alice', password: 'password123', code: 'bootstrap-e2e', displayName: 'Alice', emoji: '🦊' });
+assert.equal(a.user.isAdmin, true, 'bootstrap user is admin');
+const invite = async () => (await alice.call('POST', '/admin/invites', { note: 'e2e' }, 201)).invite.code as string;
+const bobCode = await invite();
+const b = await bob.call('POST', '/auth/signup', { username: 'bob', password: 'password123', code: bobCode });
 assert.equal(b.user.isAdmin, false);
-await carol.call('POST', '/auth/signup', { username: 'carol', password: 'password123' });
-await bob.call('POST', '/auth/signup', { username: 'Bob', password: 'password123' }, 409);
+await new Client().call('POST', '/auth/signup', { username: 'bob2', password: 'password123', code: bobCode }, 403); // single use
+await new Client().call('POST', '/auth/signup', { username: 'rando', password: 'password123', code: 'bootstrap-e2e' }, 403); // bootstrap is one-time
+await carol.call('POST', '/auth/signup', { username: 'carol', password: 'password123', code: await invite() });
+await bob.call('POST', '/auth/signup', { username: 'Bob', password: 'password123', code: await invite() }, 409);
+await bob.call('POST', '/admin/invites', {}, 403); // members can't mint invites
+await bob.call('GET', '/board', undefined, 403); // build machinery is admin-only
 await new Client().call('POST', '/auth/login', { username: 'bob', password: 'wrong-password' }, 401);
 
 // CSRF: a cookie without the token is refused
@@ -168,6 +178,11 @@ assert.equal(board.lanes.length, 5);
 assert.equal((await get(bob, cancelMe.id)).status, 'cancelled');
 await waitFor(async () => !existsSync(join(`${repo}.stall-worktrees`, `req-${cancelMe.id}`)), 'cancelled worktree removed');
 for (const r of built) assert.ok(!existsSync(join(`${repo}.stall-worktrees`, `req-${r.id}`)), `worktree cleaned for #${r.id}`);
+
+// Removal: sessions die immediately, and the account can't sign back in.
+await alice.call('POST', `/admin/members/${(await carol.call('GET', '/me')).user.id}/remove`, { policy: 'anonymize' });
+await carol.call('GET', '/members', undefined, 401);
+await new Client().call('POST', '/auth/login', { username: 'carol', password: 'password123' }, 401);
 
 console.log('\n' + execFileSync('git', ['-C', repo, 'log', '--graph', '--oneline', 'main']).toString());
 console.log('E2E PASSED');
