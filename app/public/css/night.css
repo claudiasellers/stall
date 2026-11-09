@@ -1,0 +1,58 @@
+/* Tonight tab: Home Safe, Where We At, Next Move, Cooked Meter, The Tab. Uses the base theme tokens. */
+.night-panel, .night-form { display: grid; gap: 10px; }
+.night-form label { display: grid; gap: 4px; font-size: 14px; color: var(--muted); }
+.night-form input, .night-form select, .card input, .card select {
+  background: var(--glass); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; min-width: 0;
+}
+.row-between { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.row-wrap { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.row-wrap > input { flex: 1 1 140px; }
+
+.homesafe { border: 1px solid var(--line); }
+.homesafe.phase-rollcall { border-color: var(--yellow); }
+.homesafe.phase-missing { border-color: var(--red); box-shadow: 0 0 0 2px rgb(255 107 107 / 25%); }
+.home-btn { width: 100%; font-size: 22px; padding: 18px; margin: 8px 0; background: var(--lime); color: var(--ink); }
+.home-done { font-size: 18px; padding: 12px 0; }
+.rollcall { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; }
+.rollcall li { display: grid; grid-template-columns: 28px 1fr auto; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 12px; background: var(--glass); }
+.rollcall li.home { opacity: 0.6; }
+.rollcall li.missing { background: rgb(255 210 63 / 15%); }
+.rollcall li.missing.loud { background: rgb(255 107 107 / 22%); }
+.rollcall em { color: var(--yellow); font-style: normal; font-size: 13px; }
+
+.where { list-style: none; padding: 0; margin: 6px 0; display: grid; gap: 4px; }
+.trail { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+.trail .stop { background: var(--glass-2); border-radius: 999px; padding: 4px 10px; font-weight: 600; }
+.trail .stop small { margin-left: 6px; color: var(--faint); font-weight: 400; }
+.trail .arrow { color: var(--faint); }
+
+.poll { display: grid; gap: 6px; margin: 8px 0; }
+.poll-opt { position: relative; overflow: hidden; display: flex; justify-content: space-between; gap: 8px; text-align: left;
+  border: 1px solid var(--line); background: var(--glass); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+.poll-opt .bar { position: absolute; inset: 0 auto 0 0; background: rgb(155 107 255 / 30%); z-index: 0; transition: width .3s; }
+.poll-opt .lbl, .poll-opt .n { position: relative; z-index: 1; }
+.poll-opt.mine { border-color: var(--violet); }
+.poll-opt.winner { border-color: var(--lime); }
+.poll-opt:disabled { cursor: default; }
+.poll.closed { opacity: 0.75; }
+
+.cooked-label { font-family: var(--display); font-size: 20px; margin: 6px 0; }
+input[type=range] { width: 100%; accent-color: var(--pink); }
+.cooked { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 6px; }
+.cooked li { display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center; }
+.cooked .lvl { font-family: var(--display); font-weight: 800; font-size: 20px; text-align: center; }
+.cooked li.hot .lvl { color: var(--red); }
+
+.tab-summary { display: grid; gap: 6px; color: inherit; }
+.debts, .expenses { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 8px; }
+.debts li { display: grid; grid-template-columns: 1fr auto; gap: 6px 10px; align-items: center; }
+.debts li > .row-wrap { grid-column: 1 / -1; }
+.debts .amt { font-family: var(--display); font-weight: 800; }
+.debts li.shame .amt { color: var(--red); }
+.expenses li { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.chips { gap: 6px; }
+.chip-check { display: inline-flex; gap: 6px; align-items: center; background: var(--glass); border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; font-size: 14px; }
+.wall .kicker { color: var(--red); }
+.draft { margin: 4px 0; padding: 10px 12px; border-left: 3px solid var(--pink); background: var(--glass); border-radius: 0 12px 12px 0; white-space: pre-wrap; }
+.night-form textarea { background: var(--glass); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; resize: vertical; }
+.rideshare { display: grid; gap: 6px; margin: 8px 0; }
