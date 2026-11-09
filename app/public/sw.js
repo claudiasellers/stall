@@ -1,6 +1,6 @@
 // Stall service worker: offline app shell + Web Push.
-const VERSION = 'stall-v3';
-const SHELL = ['/', '/index.html', '/app.js', '/js/core.js', '/js/views/auth.js', '/js/views/night.js', '/js/views/events.js', '/js/views/feed.js', '/js/views/lore.js', '/js/views/photos.js', '/css/photos.css', '/js/views/wrapped.js', '/css/wrapped.css', '/js/views/you.js', '/js/views/admin.js', '/style.css', '/fonts/bricolage-grotesque.woff2', '/fonts/inter.woff2', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png', '/icons/apple-touch-icon.png'];
+const VERSION = 'stall-v5';
+const SHELL = ['/', '/index.html', '/app.js', '/js/core.js', '/js/views/auth.js', '/js/views/night.js', '/js/views/events.js', '/js/views/feed.js', '/js/views/lore.js', '/js/views/photos.js', '/js/views/you.js', '/js/views/admin.js', '/style.css', '/css/events.css', '/css/posts.css', '/css/photos.css', '/css/night.css', '/js/views/wrapped.js', '/css/wrapped.css', '/fonts/bricolage-grotesque.woff2', '/fonts/inter.woff2', '/manifest.webmanifest', '/icons/icon.svg', '/icons/icon-192.png', '/icons/apple-touch-icon.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -1,0 +1,71 @@
+/* Post cards: Quote Wall, The Morning After, Lost & Found, Irish Goodbyes. */
+.pv { display: grid; gap: 10px; padding: 16px; }
+.pv-top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--faint); }
+.pv-kind { font-weight: 700; color: var(--muted); }
+.pv-event { color: var(--yellow); }
+.pv-time { margin-left: auto; }
+.pv-quote { margin: 0; font: 750 24px/1.15 var(--display); letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.pv-body { font-size: 17px; overflow-wrap: anywhere; }
+.pv-body.big { font: 750 21px/1.2 var(--display); }
+.pv-by { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--muted); }
+.pv-by.big { font: 750 21px/1.2 var(--display); color: var(--text); }
+.pv-by strong { color: var(--text); }
+.pv-av { width: 28px; height: 28px; border-radius: 999px; display: inline-grid; place-items: center; background: var(--glass-2); font-size: 15px; flex: none; }
+.pv-ctx { color: var(--muted); font-style: italic; }
+.pv-note { color: var(--muted); font-size: 14px; }
+.pv-meta { color: var(--faint); font-size: 13px; }
+.pv-fuse { color: var(--orange); }
+.pv-reveal { justify-self: start; background: none; border: 1px dashed var(--line); color: var(--faint); border-radius: 999px; padding: 4px 12px; font-size: 13px; cursor: pointer; }
+.pv-stance { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+.pv-stance.ok { background: rgb(182 243 106 / 18%); color: var(--lime); }
+.pv-stance.no { background: rgb(255 107 107 / 18%); color: var(--red); }
+.pv-sev { justify-self: start; font-weight: 800; font-size: 13px; padding: 4px 11px; border-radius: 999px; background: var(--glass-2); }
+.pv-sev.s1 { color: var(--sky); } .pv-sev.s2 { color: var(--yellow); } .pv-sev.s3 { color: var(--orange); }
+.pv-sev.s4 { color: var(--red); } .pv-sev.s5 { background: #2a1e38; color: var(--muted); }
+.pv-forgiven { justify-self: start; font-weight: 800; color: var(--lime); }
+.pv.is-forgiven, .pv.is-found { opacity: 0.8; }
+.pv-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.pv-actions .btn.on, .pv-unmask.on { background: var(--cream); color: var(--ink); }
+.pv-unmask { justify-self: start; }
+.pv-foot { display: flex; align-items: center; gap: 8px; }
+.pv-rx { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+.pv-chip { min-width: 44px; height: 36px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--glass); display: inline-flex; align-items: center; gap: 4px; cursor: pointer; font-size: 16px; }
+.pv-chip b { font-size: 13px; }
+.pv-chip.on { border-color: var(--pink); background: rgb(255 79 163 / 18%); }
+.pv-chip.add { color: var(--faint); }
+.pv-del { background: none; border: 0; cursor: pointer; opacity: 0.55; font-size: 16px; min-width: 44px; min-height: 44px; }
+.pv-quick { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+.pv-quick select, .pv-compose select { background: var(--glass); border: 1px solid var(--line); border-radius: 14px; padding: 8px 12px; min-height: 38px; }
+.pv-toggle { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; align-items: center; cursor: pointer; }
+.pv-toggle input { width: 22px; height: 22px; accent-color: var(--pink); grid-row: span 2; }
+.pv-toggle small { color: var(--faint); }
+.pv-ooc { margin-bottom: 14px; }
+.pv-sevpick { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.pv-sevpick legend { font-weight: 600; margin-bottom: 6px; }
+.pv-sevpick label { display: grid; justify-items: center; gap: 2px; padding: 8px 2px; border: 1px solid var(--line); border-radius: 14px; background: var(--glass); cursor: pointer; text-align: center; }
+.pv-sevpick label span { font-size: 24px; }
+.pv-sevpick label small { font-size: 11px; color: var(--muted); line-height: 1.1; }
+.pv-sevpick input { position: absolute; opacity: 0; pointer-events: none; }
+.pv-sevpick label:has(input:checked) { border-color: var(--pink); background: rgb(255 79 163 / 18%); }
+.pv-board ol { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 8px; }
+.pv-board li { display: flex; align-items: center; gap: 10px; }
+.pv-board .rank { width: 26px; text-align: center; font-weight: 800; }
+.pv-board .n { margin-left: auto; color: var(--muted); font-size: 14px; }
+.pv-board { padding: 16px; margin-bottom: 12px; }
+.pv-qotm { display: grid; gap: 8px; margin-bottom: 18px; }
+.pv-qotm > .card { border-color: var(--yellow); box-shadow: 0 0 0 1px var(--yellow), 0 10px 30px rgb(255 210 63 / 18%); }
+.pv-prev summary { cursor: pointer; color: var(--muted); padding: 6px 0; }
+.pv-more { margin: 14px auto; display: block; }
+.pv-event-posts { display: grid; gap: 18px; }
+.pv-group { display: grid; gap: 10px; }
+.pv-group-head { display: flex; align-items: center; justify-content: space-between; }
+.pv-item { opacity: 0.9; }
+.pv-roty { padding: 16px; margin-bottom: 12px; display: grid; gap: 12px; border-color: var(--yellow); }
+.pv-roty-round { display: grid; gap: 8px; }
+.pv-roty-match { display: grid; grid-template-columns: 1fr auto 1fr; gap: 6px; align-items: stretch; }
+.pv-roty-match .vs { align-self: center; color: var(--faint); font-size: 12px; font-weight: 800; }
+.pv-roty-side { text-align: left; display: flex; justify-content: space-between; gap: 6px; padding: 10px; border-radius: 14px; border: 1px solid var(--line); background: var(--glass); font-size: 13px; cursor: pointer; min-height: 44px; overflow-wrap: anywhere; }
+.pv-roty-side.on { border-color: var(--pink); background: rgb(255 79 163 / 18%); }
+.pv-roty-side.win { border-color: var(--lime); }
+.pv-roty-side.bye { color: var(--faint); justify-content: center; }
+.pv-roty-side:disabled { cursor: default; }
