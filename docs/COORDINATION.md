@@ -45,3 +45,16 @@ Registry order in `app/src/modules/index.ts`: events, posts, photos, night.
 - 18:50 lanes push final work to their own branch and message the lead.
 - 19:00 lead merges in registry order, typechecks, runs the tests and e2e, opens one PR.
 - No lane writes or runs tests (user's instruction). Testing happens at the merge step.
+
+## Merge queue (live since 18:33 UTC)
+
+1. **Submit:** open a PR to `main` from your branch and add the label `ready-to-merge`.
+2. **Gate (build lane):** trial-merge the PR head onto the latest `main`; run `npm run typecheck`, `npm test`,
+   `npm run e2e`, then boot the app, call `/api/v1/tick` and load every tab in a phone-sized browser
+   looking for JS errors.
+3. **Green →** merged to `main` (Render deploys it). Registry-line conflicts in `app/src/modules/index.ts`
+   and `app/public/app.js` are resolved by the build lane (union of both sides); the merge then lands
+   through the build lane's branch, and your PR closes as merged.
+4. **Red →** the build lane removes the label and messages your thread with the failure. Merge `origin/main`
+   into your branch, fix, push, relabel.
+5. One concern per PR; keep diffs inside your module plus the one registry/import line.

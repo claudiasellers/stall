@@ -5,6 +5,9 @@ import { module as events } from './events/index.ts';
 import { module as postsModule } from './posts/index.ts';
 import { module as photos } from './photos/index.ts';
 import { module as night } from './night/index.ts';
+import { module as wrapped } from './wrapped/index.ts';
+import { module as season } from './season/index.ts';
+import { module as loreModule } from './lore/index.ts';
 import { module as dating } from './dating/index.ts';
 
 export const MODULES: StallModule[] = [
@@ -12,5 +15,8 @@ export const MODULES: StallModule[] = [
   postsModule, // posts (quotes & regrets lane)
   photos, // photo drop lane
   night, // night-of lane
+  wrapped, // Wrapped + Hall of Fame/Shame (photo lane); read-only, keep last
+  season, // events lane: trips, football, templates (after night: kitty writes to the Tab)
+  loreModule, // lore (quotes & regrets lane, phase 4)
   dating, // night-of lane
 ];

@@ -1,0 +1,43 @@
+/* Stall Wrapped + Halls. Prefixed wr-. */
+.wr-cover { display: grid; gap: 12px; padding: 28px 22px; border-radius: 28px; margin-bottom: 14px;
+  background: radial-gradient(120% 90% at 0% 0%, #9b6bff 0%, transparent 60%), radial-gradient(120% 90% at 100% 100%, #ff4fa3 0%, #ff8a3d 40%, transparent 70%), #1b0f2c; }
+.wr-cover h1 { font-size: 96px; line-height: 0.9; letter-spacing: -0.05em; }
+.wr-cover-kicker { font: 800 12px/1 var(--body); letter-spacing: 0.12em; text-transform: uppercase; color: var(--yellow); }
+.wr-years { display: flex; gap: 8px; margin: 0 0 14px; }
+.wr-years .on { background: var(--cream); color: var(--ink); }
+
+.wr-story { position: fixed; inset: 0; z-index: 950; background: #000; }
+.wr-bars { position: absolute; z-index: 3; top: calc(env(safe-area-inset-top) + 10px); left: 12px; right: 56px; display: flex; gap: 4px; }
+.wr-bars i { flex: 1; height: 3px; border-radius: 3px; background: rgb(255 255 255 / 30%); overflow: hidden; }
+.wr-bars i b { display: block; height: 100%; width: 0; background: #fff; }
+.wr-bars i.done b { width: 100%; }
+.wr-bars i.on b { animation: wr-fill 7s linear forwards; }
+@keyframes wr-fill { to { width: 100%; } }
+.wr-close { position: absolute; z-index: 4; top: calc(env(safe-area-inset-top) + 2px); right: 8px; width: 44px; height: 44px; border: 0; background: transparent; color: #fff; font-size: 20px; cursor: pointer; }
+.wr-tap { position: absolute; z-index: 2; top: 0; bottom: 0; width: 40%; border: 0; background: transparent; cursor: pointer; }
+.wr-tap.prev { left: 0; }
+.wr-tap.next { right: 0; width: 60%; }
+.wr-stage { position: absolute; inset: 0; display: grid; place-items: center; padding: 72px 26px 48px; transition: background 0.4s; }
+.wr-stage.tone-hot { background: linear-gradient(160deg, #ff4fa3, #ff8a3d); }
+.wr-stage.tone-cool { background: linear-gradient(160deg, #6fd3ff, #9b6bff); }
+.wr-stage.tone-gold { background: linear-gradient(160deg, #ffd23f, #ff8a3d); color: #1a0f22; }
+.wr-stage.tone-shame { background: linear-gradient(160deg, #2b0f1a, #ff6b6b); }
+.wr-stage.tone-night { background: linear-gradient(160deg, #120a1f, #3a1f6b); }
+.wr-card { display: grid; gap: 18px; max-width: 560px; animation: wr-in 0.5s cubic-bezier(.2,.8,.2,1); }
+@keyframes wr-in { from { opacity: 0; transform: translateY(24px) scale(0.97); } }
+.wr-kicker { font: 800 14px/1.2 var(--body); letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.85; }
+.wr-big { font: 800 112px/0.9 var(--display); letter-spacing: -0.05em; word-break: break-word; }
+.wr-big.long { font-size: 40px; line-height: 1.05; letter-spacing: -0.02em; }
+.wr-line { font: 600 22px/1.25 var(--body); }
+@media (prefers-reduced-motion: reduce) { .wr-card { animation: none; } .wr-bars i.on b { animation: none; width: 100%; } }
+
+.wr-halls { display: grid; gap: 12px; margin-bottom: 14px; }
+.wr-hall { border-radius: 22px; padding: 16px; background: var(--glass); border: 1px solid var(--line); }
+.wr-hall.fame { box-shadow: inset 0 0 0 1px rgb(255 210 63 / 35%); }
+.wr-hall.shame { box-shadow: inset 0 0 0 1px rgb(255 107 107 / 35%); }
+.wr-hall-title { font: 800 19px/1.1 var(--display); margin-bottom: 10px; }
+.wr-hall ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.wr-hall li { display: grid; grid-template-columns: 28px 1fr auto; align-items: center; gap: 8px; }
+.wr-medal { font-size: 20px; }
+.wr-who { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wr-n { color: var(--muted); font-size: 14px; }
