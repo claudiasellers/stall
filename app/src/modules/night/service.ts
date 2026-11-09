@@ -1101,6 +1101,7 @@ export class NightService {
     const w = this.mustWager(wagerId);
     if (w.settled_at) throw new HttpError(409, 'This bet is settled');
     if (w.created_by === userId) throw new HttpError(409, 'You opened it. You’re in.');
+    if (w.locks_at && Date.parse(w.locks_at) <= clock.now()) throw new HttpError(409, 'Betting is locked. You’re in.');
     this.db.prepare('DELETE FROM wager_bets WHERE wager_id = ? AND user_id = ?').run(wagerId, userId);
     this.refresh('tab');
     return this.wagerView(wagerId, userId);
@@ -1151,6 +1152,10 @@ export class NightService {
     const names = (ids: number[]) => ids.map((i) => this.nameOf(i)).join(', ');
     if (winner === 'void') {
       for (const b of bets) this.ctx.svc.notify(b.user_id, null, `🎲 “${w.claim}” was called off. No money moves.`, '/wagers');
+    } else if (!winners.length || !losers.length) {
+      // Everyone was on one side: nobody owes anybody.
+      for (const b of bets) this.ctx.svc.notify(b.user_id, null, `🎲 “${w.claim}”: ${label}. Nobody bet against anyone, so no money moves.`, '/wagers');
+      this.feed('wager_settled', null, w.event_id, 'wager', wagerId, `“${w.claim}”: ${label}`);
     } else {
       for (const l of losers) this.ctx.svc.notify(l, null, `🎲 “${w.claim}”: ${label}. You lost ${money(w.stake_cents)}. It’s on the Tab.`, '/tab');
       for (const x of winners) this.ctx.svc.notify(x, null, `🎲 “${w.claim}”: ${label}. You won${losers.length ? ` off ${names(losers)}` : ''}. Collect on the Tab.`, '/tab');
