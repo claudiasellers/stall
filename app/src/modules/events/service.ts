@@ -801,6 +801,34 @@ export class EventsService {
     };
   }
 
+  // ------------------------------------------------------------ member removal
+
+  /**
+   * Runs inside core's removal transaction. Removed members already drop out of
+   * every list (removed_at). keep: nothing else. anonymize: their RSVP history and
+   * claims stay but lose the link to them. delete: their RSVPs, ratings, plus-ones,
+   * claims and the upcoming events they host are hard-deleted; past nights they
+   * hosted stay, because those archives belong to everyone who was there.
+   */
+  onMemberRemoved(userId: number, policy: 'keep' | 'anonymize' | 'delete') {
+    if (policy === 'keep') return;
+    this.db.prepare('UPDATE bring_items SET claimed_by = NULL, claimed_at = NULL WHERE claimed_by = ?').run(userId);
+    this.db.prepare(`UPDATE plus_ones SET status = 'withdrawn', decided_at = ? WHERE requester_id = ? AND status = 'pending'`).run(now(), userId);
+    if (policy === 'anonymize') {
+      this.db.prepare('UPDATE bring_items SET added_by = NULL WHERE added_by = ?').run(userId);
+      return;
+    }
+    this.db.prepare('DELETE FROM rsvps WHERE user_id = ?').run(userId);
+    this.db.prepare('DELETE FROM event_ratings WHERE user_id = ?').run(userId);
+    const po = (this.db.prepare('SELECT id FROM plus_ones WHERE requester_id = ?').all(userId) as { id: number }[]).map((r) => r.id);
+    for (const id of po) this.db.prepare(`DELETE FROM ballots WHERE subject_type = 'plus_one' AND subject_id = ?`).run(id);
+    this.db.prepare('DELETE FROM plus_ones WHERE requester_id = ?').run(userId);
+    const upcoming = this.db
+      .prepare('SELECT id FROM events WHERE host_id = ? AND parent_id IS NULL AND starts_at > ?')
+      .all(userId, now()) as { id: number }[];
+    for (const e of upcoming) this.hardDelete(e.id);
+  }
+
   // ------------------------------------------------------------ housekeeping
 
   /** Hard-delete spontaneous events past their 4-hour life. */

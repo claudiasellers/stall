@@ -114,4 +114,5 @@ export const module: StallModule = {
   routes,
   publicRoutes,
   tick: (ctx: ModuleContext) => svcFor(ctx).tick(),
+  onMemberRemoved: (ctx, userId, policy) => svcFor(ctx).onMemberRemoved(userId, policy),
 };

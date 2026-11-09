@@ -9,7 +9,7 @@ export const EVENTS_MIGRATIONS: StallModule['migrations'] = [
     sql: `
     CREATE TABLE events (
       id INTEGER PRIMARY KEY,
-      host_id INTEGER NOT NULL REFERENCES users(id),
+      host_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT, -- members are soft-removed
       parent_id INTEGER REFERENCES events(id) ON DELETE CASCADE, -- set on stages
       stage_order INTEGER NOT NULL DEFAULT 0,
       kind TEXT NOT NULL DEFAULT 'party',      -- party | dinner | trip | game | birthday | spontaneous | stage
@@ -34,6 +34,9 @@ export const EVENTS_MIGRATIONS: StallModule['migrations'] = [
     );
     CREATE INDEX events_starts ON events(parent_id, starts_at);
     CREATE INDEX events_expires ON events(expires_at) WHERE expires_at IS NOT NULL;
+    CREATE INDEX events_host ON events(host_id, starts_at);
+    CREATE INDEX events_reveal ON events(location_reveal_at) WHERE location_reveal_at IS NOT NULL;
+    CREATE INDEX events_real_start ON events(real_starts_at);
 
     -- Honest RSVPs. Stage RSVPs are rows against the stage's own event id.
     CREATE TABLE rsvps (
@@ -45,6 +48,7 @@ export const EVENTS_MIGRATIONS: StallModule['migrations'] = [
       PRIMARY KEY (event_id, user_id)
     );
     CREATE INDEX rsvps_user ON rsvps(user_id);
+    CREATE INDEX rsvps_event_updated ON rsvps(event_id, updated_at);
 
     -- Guests who came in through a guest link. They see only the card.
     CREATE TABLE guest_rsvps (
@@ -67,6 +71,7 @@ export const EVENTS_MIGRATIONS: StallModule['migrations'] = [
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       PRIMARY KEY (event_id, user_id)
     );
+    CREATE INDEX event_ratings_user ON event_ratings(user_id);
 
     CREATE TABLE bring_items (
       id INTEGER PRIMARY KEY,
@@ -78,6 +83,8 @@ export const EVENTS_MIGRATIONS: StallModule['migrations'] = [
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
     CREATE INDEX bring_items_event ON bring_items(event_id);
+    CREATE INDEX bring_items_claimed ON bring_items(claimed_by);
+    CREATE INDEX bring_items_added ON bring_items(added_by);
 
     -- Plus-one vetting: a request opens a ballot (subject_type 'plus_one') with a timer.
     CREATE TABLE plus_ones (
@@ -93,6 +100,7 @@ export const EVENTS_MIGRATIONS: StallModule['migrations'] = [
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
     CREATE INDEX plus_ones_event ON plus_ones(event_id);
+    CREATE INDEX plus_ones_requester ON plus_ones(requester_id);
     CREATE INDEX plus_ones_pending ON plus_ones(status, decides_at);
     `,
   },
