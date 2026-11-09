@@ -24,7 +24,7 @@ The web app runs on Render's free plan, and its data lives in a free Turso datab
 
 1. **Database.** Sign in at [turso.tech](https://app.turso.tech) with GitHub and create a database named `stall`. Copy its URL (`libsql://…`), then create a token and copy that too.
 2. **App.** Click [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/claudiasellers/stall), sign in with GitHub, paste the two Turso values when asked, and press **Deploy**. `render.yaml` sets everything else, including the shared secrets. Web Push keys are created on first start and stored in the database.
-3. Open `https://<service>.onrender.com` and sign up. The first account becomes the admin.
+3. Open `https://<service>.onrender.com/#/join` and enter the setup code from the `STALL_BOOTSTRAP_CODE` env var in the Render dashboard. That first account is the admin. Everyone else joins with a single-use invite code from Admin → Members.
 
 On the free plan the app sleeps after about 15 minutes with no visitors, and the first visit afterwards takes around 30 seconds. Ideas still queue up while the builder (orchestrator) is not running, and the Building tab shows the builders as taking a break. To start building, run the orchestrator somewhere with git and Claude access, such as your own computer (see below), and give it the app's `STALL_ORCH_TOKEN` and `STALL_WEBHOOK_SECRET` from the Render dashboard.
 
@@ -45,7 +45,7 @@ To click around yourself:
 ```bash
 export STALL_ORCH_TOKEN=$(openssl rand -hex 32) STALL_WEBHOOK_SECRET=$(openssl rand -hex 32)
 
-# terminal 1: the app on http://localhost:3000 (the first account you create is the admin)
+# terminal 1: the app on http://localhost:3000 (STALL_BOOTSTRAP_CODE=dev npm run app, then join with code "dev" to become admin)
 STALL_WEBHOOK_URL=http://127.0.0.1:4100/webhook npm run app
 
 # terminal 2: the orchestrator against any git repo, with the mock agent
