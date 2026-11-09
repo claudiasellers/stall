@@ -57,12 +57,16 @@ function routes(ctx: ModuleCtx) {
   r.get('/photos/:id', async (req, res) => res.json(await photos.detail(num(req.params.id), uid(req))));
   r.get('/photos/:id/original', async (req, res) => res.json(await photos.originalUrl(num(req.params.id), uid(req))));
   r.post('/photos/:id/veto', (req, res) => res.json(photos.veto(num(req.params.id), uid(req))));
-  r.delete('/photos/:id', (req, res) => res.json(photos.remove(num(req.params.id), uid(req))));
+  r.delete('/photos/:id', (req, res) => res.json(photos.remove(num(req.params.id), uid(req), !!req.user!.is_admin)));
 
   // Caption battles
   r.post('/photos/:id/captions', (req, res) => res.status(201).json(photos.addCaption(num(req.params.id), uid(req), req.body?.body)));
   r.post('/photos/captions/:cid/vote', (req, res) => res.json(photos.voteCaption(num(req.params.cid), uid(req), req.body?.on !== false)));
-  r.delete('/photos/captions/:cid', (req, res) => res.json(photos.deleteCaption(num(req.params.cid), uid(req))));
+  r.delete('/photos/captions/:cid', (req, res) => res.json(photos.deleteCaption(num(req.params.cid), uid(req), !!req.user!.is_admin)));
+
+  // Admin moderation (the service checks is_admin)
+  r.get('/admin/vetoes', (req, res) =>
+    res.json(photos.vetoLog(!!req.user!.is_admin, typeof req.query.before === 'string' ? req.query.before : undefined, Number(req.query.limit) || 50)));
 
   return r;
 }
