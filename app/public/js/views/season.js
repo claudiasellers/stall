@@ -27,7 +27,7 @@ export function seasonLinks(e) {
 route('/season', async (_p, alive) => {
   const wrap = h('div', { class: 'ev-detail' });
   const load = async () => {
-    const [g, polls, bars] = await Promise.all([api('/season/games'), api('/season/polls'), api('/season/bars')]);
+    const [g, polls, bars, tpl] = await Promise.all([api('/season/games'), api('/season/polls'), api('/season/bars'), state.user?.isAdmin ? api('/season/templates') : null]);
     if (!alive()) return;
     const teamInput = h('input', { value: g.myTeam || '', maxlength: 40, placeholder: 'Your team' });
     fill(wrap,
@@ -57,6 +57,11 @@ route('/season', async (_p, alive) => {
                 h('select', { 'aria-label': `Rate ${k}`, onchange: async (ev) => { await act(`/season/bars/${b.id}/rate`, { [k]: Number(ev.target.value) }); load(); } },
                   h('option', { value: '' }, k), [1, 2, 3, 4, 5].map((n) => h('option', { value: n }, `${k} ${n}`)))))))
           : h('p', { class: 'small muted' }, 'Which bars show which teams? Rate them.')),
+      tpl ? card(sec('🎛️ Event templates', h('button', { class: 'btn sm ghost', onclick: () => addTemplate(load) }, '+ Template')),
+        h('p', { class: 'small muted' }, 'Admins only. These show up as one-tap starters on the Host form.'),
+        tpl.templates.map((t) => h('div', { class: 'row-between' },
+          h('div', {}, h('strong', {}, t.name), h('div', { class: 'small muted' }, [t.title, t.recurrence, t.stages.length ? t.stages.join(' → ') : null].filter(Boolean).join(' · '))),
+          h('button', { class: 'btn sm danger', onclick: async () => { if (!confirm(`Delete the ${t.name} template?`)) return; await act(`/season/templates/${t.id}`, {}, 'DELETE'); load(); } }, 'Delete')))) : null,
     );
   };
   await load();
@@ -82,6 +87,30 @@ function addGame(reload) {
     field('Away', { name: 'away', required: true, maxlength: 40 }), field('Home', { name: 'home', required: true, maxlength: 40 }),
     field('Kickoff', { name: 'kickoff', type: 'datetime-local', required: true }), field('Week', { name: 'week', type: 'number', min: 1, max: 30, value: 1 }),
   ], async (fd) => { await api('/season/games', { method: 'POST', body: { away: fd.get('away'), home: fd.get('home'), kickoffAt: new Date(fd.get('kickoff')).toISOString(), week: Number(fd.get('week')) } }); reload(); });
+}
+function addTemplate(reload) {
+  const kind = h('select', { name: 'kind' }, [['party', '🪩 Party'], ['dinner', '🍝 Dinner'], ['birthday', '🎂 Birthday'], ['game', '🏈 Game'], ['trip', '✈️ Trip']].map(([v, l]) => h('option', { value: v }, l)));
+  const weekday = h('select', { name: 'weekday' }, h('option', { value: '' }, 'Any day'), ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map((d, i) => h('option', { value: i }, d)));
+  const rec = h('select', { name: 'recurrence' }, [['', 'Once'], ['weekly', 'Weekly'], ['biweekly', 'Every two weeks'], ['monthly', 'Monthly']].map(([v, l]) => h('option', { value: v }, l)));
+  dialog('New template', [
+    field('Template name', { name: 'name', required: true, maxlength: 60, placeholder: 'First-Thursday dinner' }),
+    h('label', { class: 'field' }, 'Kind', kind),
+    field('Event title', { name: 'title', required: true, maxlength: 120 }),
+    field('Vibe', { name: 'vibe', maxlength: 200 }),
+    h('label', { class: 'field' }, 'Day', weekday),
+    field('Start hour (0–23)', { name: 'startHour', type: 'number', min: 0, max: 23, value: 21 }),
+    h('label', { class: 'field' }, 'Repeats', rec),
+    field('Stages (comma separated)', { name: 'stages', maxlength: 300, placeholder: 'Dinner, Bar' }),
+    field('Bring list (comma separated)', { name: 'bring', maxlength: 600, placeholder: 'Wine, Ice' }),
+  ], async (fd) => {
+    const list = (k) => String(fd.get(k) || '').split(',').map((x) => x.trim()).filter(Boolean);
+    await api('/season/templates', { method: 'POST', body: {
+      name: fd.get('name'), kind: fd.get('kind'), title: fd.get('title'), vibe: fd.get('vibe'),
+      weekday: fd.get('weekday') === '' ? null : Number(fd.get('weekday')), startHour: Number(fd.get('startHour')),
+      recurrence: fd.get('recurrence') || null, stages: list('stages'), bring: list('bring'),
+    } });
+    reload();
+  });
 }
 function addBar(reload) {
   dialog('Add a bar', [field('Name', { name: 'name', required: true, maxlength: 80 }), field('Neighborhood', { name: 'neighborhood', maxlength: 60 }), field('Shows', { name: 'teams', maxlength: 200, placeholder: 'Giants, Jets, Premier League' })],
