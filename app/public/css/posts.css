@@ -69,3 +69,23 @@
 .pv-roty-side.win { border-color: var(--lime); }
 .pv-roty-side.bye { color: var(--faint); justify-content: center; }
 .pv-roty-side:disabled { cursor: default; }
+/* Lore sub-tabs */
+.seg a.segbtn { flex: none; padding: 9px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--glass); color: var(--text); font-weight: 650; font-size: 14px; white-space: nowrap; }
+.seg a.segbtn.on { background: var(--cream); color: var(--ink); border-color: var(--cream); }
+.lr-add summary { cursor: pointer; font-weight: 700; padding: 4px 0; }
+.lr-add { padding: 14px 16px; }
+.lr-add[open] summary { margin-bottom: 12px; }
+.lr-verdict { font-weight: 800; }
+.lr-verdict.guilty { color: var(--red); } .lr-verdict.not_guilty { color: var(--lime); } .lr-verdict.dismissed { color: var(--faint); }
+.lr-worst { border-color: var(--red); }
+.lr-search { flex: 1; min-width: 0; background: var(--glass); border: 1px solid var(--line); border-radius: 14px; padding: 8px 12px; min-height: 38px; }
+.lr-prophecy.sealed .pv-quote { color: var(--muted); }
+.lr-86 { padding: 16px; display: grid; gap: 10px; }
+.lr-86-row { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
+.lr-leaders { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.lr-leaders li { display: flex; align-items: center; gap: 6px; }
+.lr-sup select { background: var(--glass); border: 1px solid var(--line); border-radius: 14px; padding: 8px 12px; min-height: 40px; }
+.lr-otd-q { display: grid; gap: 2px; color: inherit; }
+.lr-quiz { background: var(--ink); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; width: min(520px, calc(100vw - 32px)); }
+.lr-quiz::backdrop { background: rgb(0 0 0 / 60%); }
+.lr-opt { text-align: left; height: auto; min-height: 48px; padding: 10px 14px; white-space: normal; }

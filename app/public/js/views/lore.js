@@ -2,6 +2,19 @@
 // Context toggle, then every line the group has said, newest first.
 import { api, h, route, go, shell, empty, head, mount } from '../core.js';
 import { postCard, postsMeta, setOoc, liveRefresh } from './feed.js';
+import { courtTab, takesTab, canonTab, propheciesTab, list86Tab, superlativesTab, onThisDayTab } from './lore-more.js';
+
+const LORE_TABS = [
+  ['quotes', '🗣️ Overheard'], ['court', '⚖️ Court'], ['takes', '🌶️ Hot Takes'], ['canon', '📖 Canon'],
+  ['prophecies', '🔮 Prophecies'], ['superlatives', '🏆 Superlatives'], ['86', '🚫 86’d'], ['otd', '📅 On This Day'],
+];
+const RENDER = { court: () => courtTab(query().get('case')), takes: takesTab, canon: canonTab, prophecies: propheciesTab, superlatives: superlativesTab, '86': list86Tab, otd: onThisDayTab };
+const loreSeg = (tab) => [
+  // Pages built by the photo lane that live under Lore.
+  h('div', { class: 'pv-quick' }, h('a', { class: 'btn sm ghost', href: '#/lore/map' }, '📍 Lore Map'), h('a', { class: 'btn sm ghost', href: '#/halls' }, '🏆 The Halls'), h('a', { class: 'btn sm ghost', href: '#/wrapped' }, '🎁 Wrapped')),
+  h('div', { class: 'seg', role: 'tablist' },
+    LORE_TABS.map(([k, label]) => h('a', { role: 'tab', class: `segbtn ${tab === k ? 'on' : ''}`, 'aria-selected': String(tab === k), href: k === 'quotes' ? '#/lore' : `#/lore?tab=${k}` }, label))),
+];
 
 const fill = (el, ...nodes) => el.replaceChildren(...nodes.flat(Infinity).filter((n) => n !== null && n !== undefined && n !== false));
 const query = () => new URLSearchParams(location.hash.split('?')[1] || '');
@@ -23,6 +36,14 @@ function qotm(data) {
 }
 
 route('/lore(?:\\?.*)?', async (_p, alive) => {
+  const tab = query().get('tab') || 'quotes';
+  if (RENDER[tab]) {
+    await postsMeta();
+    const { node, load } = RENDER[tab]();
+    mount(shell({ tab: 'lore', fab: false }, head('Lore', LORE_TABS.find(([k]) => k === tab)[1], null), loreSeg(tab), node));
+    liveRefresh(alive, load);
+    return;
+  }
   const meta = await postsMeta();
   const focus = query().get('post');
   const listEl = h('div', { class: 'list' });
@@ -60,6 +81,7 @@ route('/lore(?:\\?.*)?', async (_p, alive) => {
   mount(
     shell({ tab: 'lore', fab: false },
       head('Lore', 'Overheard', 'Said out loud, written down forever.'),
+      loreSeg('quotes'),
       h('div', { class: 'pv-quick' }, h('a', { class: 'btn sm hot', href: '#/post/new?kind=quote' }, '🗣️ Add a quote'), who),
       toggle, topEl, listEl, more));
   liveRefresh(alive, () => load());
