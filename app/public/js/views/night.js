@@ -1,6 +1,7 @@
 // Tonight tab (#/tonight) and the per-event night panel: Home Safe roll call +
-// buddies, Where We At, Next Move polls, Cooked Meter, and The Tab (#/tab).
-import { api, h, toast, route, go, shell, state, empty, ago, head } from '../core.js';
+// buddies, Rideshare Roulette, hydration nag, Where We At, Next Move polls,
+// Cooked Meter, Draft Jail, and The Tab (#/tab).
+import { api, h, toast, route, go, shell, state, empty, ago, head, mount, setRefresh } from '../core.js';
 import { eventCard } from './events.js';
 
 // Styles live next to the view; CSP allows same-origin stylesheets.
@@ -128,10 +129,21 @@ function homeSafeCard(s, reload) {
               { class: 'small' },
               myBuddies.length ? ['Your buddy: ', h('strong', {}, myBuddies.map((b) => b.name).join(' & ')), '. You’re responsible for each other.'] : 'No buddy yet.',
             ),
+            rideshareBlock(s, reload),
             h(
               'div',
               { class: 'row-wrap' },
               pick,
+              h(
+                'label',
+                { class: 'chip-check' },
+                h('input', {
+                  type: 'checkbox',
+                  checked: s.me.hydrate,
+                  onchange: async (e) => act(() => api(`/night/sessions/${s.id}/hydrate`, { method: 'POST', body: { on: e.target.checked } }), e.target.checked ? '💧 Water reminders every 90 min' : 'Reminders off'),
+                }),
+                '💧 Nag me to drink water',
+              ),
               h('button', { class: 'btn ghost sm', onclick: () => toggleLocation(s, reload) }, s.me.sharingLocation ? '📍 Stop sharing location' : '📍 Share location with buddy'),
             ),
           ),
@@ -178,6 +190,91 @@ function homeSafeCard(s, reload) {
           h('button', { class: 'btn ghost sm', onclick: async () => confirm('End the roll call for everyone?') && (await act(() => api(`/night/sessions/${s.id}/end`, { method: 'POST' })), reload()) }, 'End'),
         )
       : null,
+  );
+}
+
+function rideshareBlock(s, reload) {
+  const heading = h('input', { placeholder: 'Heading to… (Bushwick, UES)', maxlength: '40', value: s.me.heading || '' });
+  return h(
+    'div',
+    { class: 'rideshare' },
+    h(
+      'form',
+      {
+        class: 'row-wrap',
+        onsubmit: async (e) => {
+          e.preventDefault();
+          await act(() => api(`/night/sessions/${s.id}/heading`, { method: 'POST', body: { heading: heading.value } }), '🧭 Got it');
+          reload();
+        },
+      },
+      heading,
+      h('button', { class: 'btn ghost sm' }, 'Set'),
+      h(
+        'button',
+        {
+          class: 'btn ghost sm',
+          type: 'button',
+          onclick: async () => {
+            const r = await act(() => api(`/night/sessions/${s.id}/rideshare`, { method: 'POST' }));
+            toast(`🚕 ${r.cars.map((c) => `${c.booker} books ${c.heading}`).join(' · ')}`);
+            reload();
+          },
+        },
+        '🎰 Rideshare Roulette',
+      ),
+    ),
+    s.rides?.length
+      ? h('ul', { class: 'where' }, s.rides.slice(0, 4).map((r) => h('li', {}, '🚕 ', h('strong', {}, r.booker), ` books ${r.heading} for ${r.riders.join(', ')}`, h('span', { class: 'small' }, ` · ${ago(r.at)}`))))
+      : null,
+  );
+}
+
+// ------------------------------------------------------------------ Draft Jail
+
+function draftJailCard(drafts, reload) {
+  const to = h('input', { placeholder: 'my ex', maxlength: '40' });
+  const body = h('textarea', { placeholder: 'hey u up', maxlength: '1000', rows: '3', required: true });
+  const LABEL = { send: '📤 Send it', no: '🚫 Absolutely not', noon: '🕛 Wait till noon' };
+  return h(
+    'section',
+    { class: 'card' },
+    h('div', { class: 'kicker' }, '🚔 Draft Jail'),
+    drafts.map((d) =>
+      h(
+        'div',
+        { class: 'poll' },
+        h('div', { class: 'row-between' }, h('strong', {}, `${d.by} → ${d.recipient}`), h('span', { class: 'small' }, left(d.closesAt))),
+        h('blockquote', { class: 'draft' }, d.body),
+        h(
+          'div',
+          { class: 'row-wrap' },
+          Object.entries(LABEL).map(([k, label]) =>
+            h(
+              'button',
+              { class: `btn sm ${d.myChoice === k ? '' : 'ghost'}`, onclick: async () => (await act(() => api(`/night/drafts/${d.id}/vote`, { method: 'POST', body: { choice: k } })), reload()) },
+              `${label} ${d.tally[k] || ''}`,
+            ),
+          ),
+          d.mine ? h('button', { class: 'btn ghost sm', onclick: async () => (await act(() => api(`/night/drafts/${d.id}/release`, { method: 'POST' }), 'Verdict’s in. Draft destroyed.'), reload()) }, 'Get verdict now') : null,
+        ),
+      ),
+    ),
+    h(
+      'form',
+      {
+        class: 'night-form',
+        onsubmit: async (e) => {
+          e.preventDefault();
+          await act(() => api('/night/drafts', { method: 'POST', body: { recipient: to.value, body: body.value } }), '🚔 Locked up. The group has 30 minutes.');
+          reload();
+        },
+      },
+      h('p', { class: 'small' }, 'Write the text here instead. The group votes for 30 minutes, then the draft is destroyed.'),
+      to,
+      body,
+      h('button', { class: 'btn sm' }, 'Lock it up'),
+    ),
   );
 }
 
@@ -443,6 +540,7 @@ async function nightSections(eventId, reload, { showTab = true } = {}) {
     whereWeAtCard(night.trail, eventId, reload),
     nextMoveCard(night.polls, eventId, reload),
     cookedCard(night.cooked, night.cookedLabels, eventId, reload),
+    draftJailCard(night.drafts || [], reload),
     tab ? tabSummaryCard(tab) : null,
   ];
 }
@@ -478,19 +576,21 @@ route('/tonight', async (_p, alive) => {
       event ? eventCard(event) : null,
       ...sections,
     );
-    document.getElementById('app').replaceChildren(main);
+    mount(main);
   };
   await render();
-  // Poll timers and roll call move on their own; refresh while the tab is open.
+  // Live updates from the server re-run render; timers (poll countdowns, cutoff) also move on their own.
+  setRefresh(() => render().catch(() => {}));
   const t = setInterval(() => (alive && !alive() ? clearInterval(t) : document.visibilityState === 'visible' && render().catch(() => {})), 30_000);
 });
 
 route('/tonight/poll/:id', async ({ id }) => {
   const { poll } = await api(`/night/polls/${id}`);
   const reload = () => go(`/tonight/poll/${id}`);
-  document.getElementById('app').replaceChildren(shell({ title: 'Next move', tab: 'tonight', back: '/tonight' }, h('section', { class: 'card' }, pollCard(poll, reload))));
+  mount(shell({ title: 'Next move', tab: 'tonight', back: '/tonight' }, h('section', { class: 'card' }, pollCard(poll, reload))));
 });
 
 route('/tab', async () => {
-  document.getElementById('app').replaceChildren(shell({ title: 'The Tab', tab: 'tonight', back: '/tonight' }, ...(await tabView(null))));
+  setRefresh(() => go('/tab'));
+  mount(shell({ title: 'The Tab', tab: 'tonight', back: '/tonight' }, ...(await tabView(null))));
 });

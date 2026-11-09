@@ -1,6 +1,7 @@
 // Night-of routes, mounted at /api/v1 behind requireMember + CSRF by the module registry.
 import express, { type Request } from 'express';
 import { HttpError } from '../../service.ts';
+import { clock } from '../../clock.ts';
 import { NightService, COOKED_LABELS, BUDDY_PING_AFTER, GROUP_PING_AFTER } from './service.ts';
 
 const pid = (req: Request, key = 'id'): number => {
@@ -8,6 +9,10 @@ const pid = (req: Request, key = 'id'): number => {
   if (!Number.isInteger(n) || n <= 0) throw new HttpError(400, 'Bad id');
   return n;
 };
+const page = (req: Request) => ({
+  before: typeof req.query.before === 'string' && req.query.before ? req.query.before : undefined,
+  limit: req.query.limit ? Number(req.query.limit) : undefined,
+});
 const eventQ = (req: Request): number | null => {
   const v = req.query.eventId;
   if (v === undefined || v === '') return null;
@@ -63,10 +68,10 @@ export function nightRoutes(night: NightService) {
   r.delete('/night/checkins/:id', (req, res) => res.json(night.deleteCheckIn(pid(req), uid(req))));
 
   // ---- Next Move
-  r.get('/night/polls', (req, res) => res.json({ polls: night.polls(uid(req), eventQ(req)) }));
+  r.get('/night/polls', (req, res) => res.json({ polls: night.polls(uid(req), eventQ(req), page(req)) }));
   r.post('/night/polls', (req, res) => res.status(201).json({ poll: night.createPoll(uid(req), req.body ?? {}) }));
   r.get('/night/polls/:id', (req, res) => {
-    night.closeDuePolls(Date.now());
+    night.closeDuePolls(clock.now());
     res.json({ poll: night.pollView(pid(req), uid(req)) });
   });
   r.post('/night/polls/:id/vote', (req, res) => res.json({ poll: night.vote(pid(req), uid(req), Number(req.body?.optionId)) }));
@@ -77,7 +82,7 @@ export function nightRoutes(night: NightService) {
   r.get('/night/cooked/stats', (req, res) => res.json({ stats: night.cookedStats(req.query.userId ? Number(req.query.userId) : undefined) }));
 
   // ---- The Tab
-  r.get('/tab', (req, res) => res.json(night.tab(uid(req), eventQ(req))));
+  r.get('/tab', (req, res) => res.json(night.tab(uid(req), eventQ(req), page(req))));
   r.post('/tab/expenses', (req, res) => res.status(201).json(night.addExpense(uid(req), req.body ?? {})));
   r.delete('/tab/expenses/:id', (req, res) => res.json(night.deleteExpense(pid(req), uid(req), !!req.user!.is_admin)));
   r.post('/tab/settlements', (req, res) => res.status(201).json(night.settle(uid(req), req.body ?? {})));

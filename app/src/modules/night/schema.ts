@@ -107,7 +107,6 @@ export const NIGHT_MIGRATIONS: { id: string; sql: string }[] = [
     created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     description TEXT NOT NULL,              -- free-text memo only, by design
     amount_cents INTEGER NOT NULL CHECK (amount_cents > 0),
-    deleted_at TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
   );
   CREATE INDEX tab_expenses_event ON tab_expenses(event_id);

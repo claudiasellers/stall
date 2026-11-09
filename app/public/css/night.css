@@ -53,3 +53,6 @@ input[type=range] { width: 100%; accent-color: var(--pink); }
 .chips { gap: 6px; }
 .chip-check { display: inline-flex; gap: 6px; align-items: center; background: var(--glass); border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; font-size: 14px; }
 .wall .kicker { color: var(--red); }
+.draft { margin: 4px 0; padding: 10px 12px; border-left: 3px solid var(--pink); background: var(--glass); border-radius: 0 12px 12px 0; white-space: pre-wrap; }
+.night-form textarea { background: var(--glass); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; resize: vertical; }
+.rideshare { display: grid; gap: 6px; margin: 8px 0; }

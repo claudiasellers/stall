@@ -2,6 +2,7 @@
 // decided from database state so the tick (and lazy reads) are idempotent.
 import { type Db, tx, now } from '../../db.ts';
 import { HttpError } from '../../service.ts';
+import { clock } from '../../clock.ts';
 
 /** The slice of the module context this file needs. */
 export type NightCtx = {
@@ -95,6 +96,11 @@ export class NightService {
         .run(kind, actorId, eventId, subjectType, subjectId, body);
     } catch {}
   }
+  private dropFeed(subjectType: string, subjectId: number) {
+    try {
+      this.db.prepare('DELETE FROM feed_items WHERE subject_type = ? AND subject_id = ?').run(subjectType, subjectId);
+    } catch {}
+  }
   /** Idempotency key for a push the tick must send at most once. */
   private once(key: string): boolean {
     try {
@@ -168,7 +174,7 @@ export class NightService {
     });
     const starter = this.nameOf(userId);
     for (const uid of ids)
-      if (uid !== userId) this.ctx.svc.notify(uid, null, `🏠 ${starter} started Home Safe for “${title}”. Check who your buddy is.`, `/#/tonight`);
+      if (uid !== userId) this.ctx.svc.notify(uid, null, `🏠 ${starter} started Home Safe for “${title}”. Check who your buddy is.`, `/tonight`);
     this.feed('home_safe_started', userId, eventId, 'night_session', id, `${starter} started Home Safe roll call`);
     this.refresh();
     return this.sessionView(id, userId);
@@ -230,7 +236,7 @@ export class NightService {
          FROM night_members m WHERE m.session_id = ? AND m.user_id != ? AND m.home_at IS NULL
          ORDER BY (m.buddy_id IS NOT NULL), cooked, RANDOM()`,
       )
-      .all(new Date(Date.now() - COOKED_WINDOW).toISOString(), sessionId, userId) as { user_id: number; buddy_id: number | null; cooked: number }[];
+      .all(new Date(clock.now() - COOKED_WINDOW).toISOString(), sessionId, userId) as { user_id: number; buddy_id: number | null; cooked: number }[];
     const pick = candidates.find((c) => c.cooked < COOKED_BUDDY_LEVEL) ?? candidates[0];
     if (!pick) return null;
     this.db.prepare('UPDATE night_members SET buddy_id = ? WHERE session_id = ? AND user_id = ?').run(pick.user_id, sessionId, userId);
@@ -242,7 +248,7 @@ export class NightService {
     const s = this.mustSession(sessionId);
     if (s.started_by !== userId) throw new HttpError(403, 'Only whoever started the night can reshuffle');
     tx(this.db, () => this.pairRandom(sessionId));
-    for (const m of this.members(sessionId)) if (!m.home_at && m.buddy_id) this.ctx.svc.notify(m.user_id, null, `🔀 Buddies reshuffled. You’re with ${this.nameOf(m.buddy_id)} now.`, '/#/tonight');
+    for (const m of this.members(sessionId)) if (!m.home_at && m.buddy_id) this.ctx.svc.notify(m.user_id, null, `🔀 Buddies reshuffled. You’re with ${this.nameOf(m.buddy_id)} now.`, '/tonight');
     this.refresh();
     return this.sessionView(sessionId, userId);
   }
@@ -260,7 +266,7 @@ export class NightService {
       const orphans = this.db.prepare('SELECT user_id FROM night_members WHERE session_id = ? AND buddy_id IS NULL AND home_at IS NULL').all(sessionId) as { user_id: number }[];
       for (const o of orphans) this.assignBuddy(sessionId, o.user_id);
     });
-    this.ctx.svc.notify(buddyId, null, `🤝 ${this.nameOf(userId)} picked you as their buddy tonight.`, '/#/tonight');
+    this.ctx.svc.notify(buddyId, null, `🤝 ${this.nameOf(userId)} picked you as their buddy tonight.`, '/tonight');
     this.refresh();
     return this.sessionView(sessionId, userId);
   }
@@ -285,12 +291,12 @@ export class NightService {
     });
     if (lateLevel >= 3) {
       // The group was told they were missing; tell the group they're fine.
-      this.ctx.svc.notifyMembers(`🏠 Panic over: ${name} is home safe.`, '/#/tonight', userId);
+      this.ctx.svc.notifyMembers(`🏠 Panic over: ${name} is home safe.`, '/tonight', userId);
     } else {
-      for (const b of this.buddiesOf(sessionId, userId)) this.ctx.svc.notify(b, null, `🏠 ${name} is home safe.`, '/#/tonight');
+      for (const b of this.buddiesOf(sessionId, userId)) this.ctx.svc.notify(b, null, `🏠 ${name} is home safe.`, '/tonight');
     }
     if (allHome) {
-      for (const mm of this.members(sessionId)) this.ctx.svc.notify(mm.user_id, null, `✅ Everyone from “${s.title}” is home. Roll call closed.`, '/#/tonight');
+      for (const mm of this.members(sessionId)) this.ctx.svc.notify(mm.user_id, null, `✅ Everyone from “${s.title}” is home. Roll call closed.`, '/tonight');
       this.feed('home_safe_closed', null, s.event_id, 'night_session', sessionId, `Everyone made it home from “${s.title}”`);
     }
     this.refresh();
@@ -341,7 +347,7 @@ export class NightService {
     const members = this.members(sessionId);
     const myBuddies = new Set(this.buddiesOf(sessionId, viewerId));
     const cutoff = Date.parse(s.cutoff_at);
-    const nowMs = Date.now();
+    const nowMs = clock.now();
     const me = members.find((m) => m.user_id === viewerId);
     return {
       id: s.id,
@@ -403,18 +409,18 @@ export class NightService {
           .run(target, s.id, m.user_id, target).changes;
         if (!claimed) continue;
         if (target >= 1 && m.escalation < 1) {
-          this.ctx.svc.notify(m.user_id, null, `🏠 Roll call for “${s.title}”. Tap home when you’re in.`, '/#/tonight');
+          this.ctx.svc.notify(m.user_id, null, `🏠 Roll call for “${s.title}”. Tap home when you’re in.`, '/tonight');
           sent++;
         }
         if (target >= 2 && m.escalation < 2) {
           const buddies = this.buddiesOf(s.id, m.user_id);
           for (const b of buddies) {
-            this.ctx.svc.notify(b, null, `⚠️ ${m.name} hasn’t tapped home an hour after cutoff. You’re their buddy: check on them.`, '/#/tonight');
+            this.ctx.svc.notify(b, null, `⚠️ ${m.name} hasn’t tapped home an hour after cutoff. You’re their buddy: check on them.`, '/tonight');
             sent++;
           }
         }
         if (target >= 3) {
-          this.ctx.svc.notifyMembers(`🚨 ${m.name} still hasn’t tapped home from “${s.title}”. Has anyone heard from them?`, '/#/tonight', m.user_id);
+          this.ctx.svc.notifyMembers(`🚨 ${m.name} still hasn’t tapped home from “${s.title}”. Has anyone heard from them?`, '/tonight', m.user_id);
           this.feed('home_safe_missing', m.user_id, s.event_id, 'night_session', s.id, `${m.name} is unaccounted for`);
           sent++;
         }
@@ -446,6 +452,7 @@ export class NightService {
   deleteCheckIn(id: number, userId: number) {
     const r = this.db.prepare('DELETE FROM night_checkins WHERE id = ? AND user_id = ?').run(id, userId);
     if (!r.changes) throw new HttpError(404, 'Not your check-in');
+    this.dropFeed('night_checkin', id);
     this.refresh();
     return { ok: true };
   }
@@ -454,10 +461,10 @@ export class NightService {
   trail(eventId: number | null) {
     const rows = (
       eventId
-        ? this.db.prepare(`SELECT c.*, ${NAME} AS name FROM night_checkins c JOIN users u ON u.id = c.user_id WHERE c.event_id = ? ORDER BY c.created_at`).all(eventId)
+        ? this.db.prepare(`SELECT c.*, ${NAME} AS name FROM night_checkins c JOIN users u ON u.id = c.user_id WHERE c.event_id = ? ORDER BY c.created_at LIMIT 500`).all(eventId)
         : this.db
-            .prepare(`SELECT c.*, ${NAME} AS name FROM night_checkins c JOIN users u ON u.id = c.user_id WHERE c.created_at >= ? ORDER BY c.created_at`)
-            .all(new Date(Date.now() - COOKED_WINDOW).toISOString())
+            .prepare(`SELECT c.*, ${NAME} AS name FROM night_checkins c JOIN users u ON u.id = c.user_id WHERE c.created_at >= ? ORDER BY c.created_at LIMIT 500`)
+            .all(new Date(clock.now() - COOKED_WINDOW).toISOString())
     ) as { id: number; user_id: number; name: string; venue: string; next_venue: string | null; next_at: string | null; note: string | null; created_at: string; event_id: number | null }[];
     // Where is each person now (their latest check-in), and the group's stops in order.
     const latest = new Map<number, (typeof rows)[number]>();
@@ -486,7 +493,7 @@ export class NightService {
     const minutes = body.minutes === undefined ? POLL_MINUTES_DEFAULT : Number(body.minutes);
     if (!Number.isInteger(minutes) || minutes < 1 || minutes > 60) throw new HttpError(400, 'Timer must be 1–60 minutes');
     const eventId = optInt(body.eventId);
-    const closesAt = new Date(Date.now() + minutes * MIN).toISOString();
+    const closesAt = new Date(clock.now() + minutes * MIN).toISOString();
     const id = tx(this.db, () => {
       const pid = Number(this.db.prepare('INSERT INTO night_polls (event_id, user_id, question, closes_at) VALUES (?, ?, ?, ?)').run(eventId, userId, question, closesAt).lastInsertRowid);
       const ins = this.db.prepare('INSERT INTO night_poll_options (poll_id, position, label) VALUES (?, ?, ?)');
@@ -494,13 +501,13 @@ export class NightService {
       return pid;
     });
     const name = this.nameOf(userId);
-    this.ctx.svc.notifyMembers(`🗳️ ${name}: “${question}” ${options.join(' / ')}. ${minutes} min to vote.`, `/#/tonight/poll/${id}`, userId);
+    this.ctx.svc.notifyMembers(`🗳️ ${name}: “${question}” ${options.join(' / ')}. ${minutes} min to vote.`, `/tonight/poll/${id}`, userId);
     this.refresh();
     return this.pollView(id, userId);
   }
 
   vote(pollId: number, userId: number, optionId: number) {
-    this.closeDuePolls(Date.now());
+    this.closeDuePolls(clock.now());
     const p = this.db.prepare('SELECT * FROM night_polls WHERE id = ?').get(pollId) as { closed_at: string | null } | undefined;
     if (!p) throw new HttpError(404, 'Poll not found');
     if (p.closed_at) throw new HttpError(409, 'Voting closed');
@@ -518,7 +525,7 @@ export class NightService {
     const members = this.memberIds().length;
     const counts = this.db.prepare('SELECT option_id, COUNT(*) AS n FROM night_poll_votes WHERE poll_id = ? GROUP BY option_id').all(pollId) as { option_id: number; n: number }[];
     const total = counts.reduce((a, c) => a + c.n, 0);
-    if (total >= members || counts.some((c) => c.n * 2 > members)) this.closePoll(pollId, Date.now());
+    if (total >= members || counts.some((c) => c.n * 2 > members)) this.closePoll(pollId, clock.now());
   }
 
   private closePoll(pollId: number, nowMs: number) {
@@ -538,7 +545,7 @@ export class NightService {
     const body = winner
       ? `📍 The group has spoken: ${winner.label}${tie ? ' (won the tiebreak)' : ''}. Move.`
       : `🦗 Nobody voted on “${p.question}”. Stay put, apparently.`;
-    this.ctx.svc.notifyMembers(body, `/#/tonight/poll/${pollId}`);
+    this.ctx.svc.notifyMembers(body, `/tonight/poll/${pollId}`);
     if (winner) this.feed('next_move', null, p.event_id, 'night_poll', pollId, `Next move: ${winner.label}`);
     this.refresh();
   }
@@ -577,15 +584,43 @@ export class NightService {
     };
   }
 
-  polls(viewerId: number, eventId: number | null) {
-    this.closeDuePolls(Date.now());
-    const since = new Date(Date.now() - COOKED_WINDOW).toISOString();
-    const ids = (
-      eventId
-        ? this.db.prepare('SELECT id FROM night_polls WHERE event_id = ? ORDER BY id DESC LIMIT 20').all(eventId)
-        : this.db.prepare('SELECT id FROM night_polls WHERE created_at >= ? ORDER BY id DESC LIMIT 20').all(since)
-    ) as { id: number }[];
-    return ids.map((r) => this.pollView(r.id, viewerId));
+  /** Recent polls, three queries total regardless of count. */
+  polls(viewerId: number, eventId: number | null, opts: { before?: string; limit?: number } = {}) {
+    this.closeDuePolls(clock.now());
+    const limit = Math.min(Math.max(opts.limit ?? 20, 1), 50);
+    const since = opts.before ? '' : new Date(clock.now() - COOKED_WINDOW).toISOString();
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (eventId) (where.push('p.event_id = ?'), params.push(eventId));
+    else if (since) (where.push('p.created_at >= ?'), params.push(since));
+    if (opts.before) (where.push('p.created_at < ?'), params.push(opts.before));
+    const polls = this.db
+      .prepare(`SELECT p.*, ${NAME} AS name FROM night_polls p JOIN users u ON u.id = p.user_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY p.created_at DESC LIMIT ?`)
+      .all(...params, limit) as { id: number; event_id: number | null; name: string; question: string; closes_at: string; closed_at: string | null; winner_option_id: number | null; created_at: string }[];
+    if (!polls.length) return [];
+    const ids = polls.map((p) => p.id);
+    const marks = ids.map(() => '?').join(',');
+    const options = this.db.prepare(`SELECT id, poll_id, label FROM night_poll_options WHERE poll_id IN (${marks}) ORDER BY poll_id, position`).all(...ids) as { id: number; poll_id: number; label: string }[];
+    const votes = this.db
+      .prepare(`SELECT v.poll_id, v.option_id, v.user_id, ${NAME} AS name FROM night_poll_votes v JOIN users u ON u.id = v.user_id WHERE v.poll_id IN (${marks})`)
+      .all(...ids) as { poll_id: number; option_id: number; user_id: number; name: string }[];
+    return polls.map((p) => ({
+      id: p.id,
+      eventId: p.event_id,
+      by: p.name,
+      question: p.question,
+      closesAt: p.closes_at,
+      closed: !!p.closed_at,
+      winnerOptionId: p.winner_option_id,
+      myOptionId: votes.find((v) => v.poll_id === p.id && v.user_id === viewerId)?.option_id ?? null,
+      options: options
+        .filter((o) => o.poll_id === p.id)
+        .map((o) => {
+          const vs = votes.filter((v) => v.option_id === o.id);
+          return { id: o.id, label: o.label, votes: vs.length, voters: vs.map((v) => v.name) };
+        }),
+      createdAt: p.created_at,
+    }));
   }
 
   // ======================================================== Cooked Meter
@@ -614,7 +649,7 @@ export class NightService {
           const b = this.assignBuddy(s.id, userId);
           current = b ? [b] : [];
         }
-        for (const b of current) this.ctx.svc.notify(b, null, `🥴 ${this.nameOf(userId)} just hit ${level}/10 on the Cooked Meter. You’re their buddy. Godspeed.`, '/#/tonight');
+        for (const b of current) this.ctx.svc.notify(b, null, `🥴 ${this.nameOf(userId)} just hit ${level}/10 on the Cooked Meter. You’re their buddy. Godspeed.`, '/tonight');
         if (current[0]) buddy = { id: current[0], name: this.nameOf(current[0]) };
       }
     }
@@ -623,7 +658,7 @@ export class NightService {
   }
 
   cookedBoard() {
-    const since = new Date(Date.now() - COOKED_WINDOW).toISOString();
+    const since = new Date(clock.now() - COOKED_WINDOW).toISOString();
     const rows = this.db
       .prepare(
         `SELECT c.user_id, ${NAME} AS name, c.level, c.created_at FROM cooked_reports c JOIN users u ON u.id = c.user_id
@@ -703,17 +738,20 @@ export class NightService {
     });
     const payer = this.nameOf(payerId);
     for (const [u, c] of shares)
-      if (u !== payerId && c > 0) this.ctx.svc.notify(u, null, `💸 ${payer} covered “${description}”. Your share: ${money(c)}.`, '/#/tab');
+      if (u !== payerId && c > 0) this.ctx.svc.notify(u, null, `💸 ${payer} covered “${description}”. Your share: ${money(c)}.`, '/tab');
     this.feed('tab_expense', payerId, eventId, 'tab_expense', id, `${payer} covered ${description} (${money(amountCents)})`);
     this.refresh('tab');
     return { id };
   }
 
   deleteExpense(id: number, userId: number, isAdmin: boolean) {
-    const e = this.db.prepare('SELECT * FROM tab_expenses WHERE id = ? AND deleted_at IS NULL').get(id) as { created_by: number; payer_id: number } | undefined;
+    const e = this.db.prepare('SELECT * FROM tab_expenses WHERE id = ?').get(id) as { created_by: number; payer_id: number } | undefined;
     if (!e) throw new HttpError(404, 'Expense not found');
     if (e.created_by !== userId && e.payer_id !== userId && !isAdmin) throw new HttpError(403, 'Only whoever logged it can delete it');
-    this.db.prepare('UPDATE tab_expenses SET deleted_at = ? WHERE id = ?').run(now(), id);
+    tx(this.db, () => {
+      this.db.prepare('DELETE FROM tab_expenses WHERE id = ?').run(id); // shares cascade
+      this.dropFeed('tab_expense', id);
+    });
     this.refresh('tab');
     return { ok: true };
   }
@@ -731,7 +769,7 @@ export class NightService {
     if (!Number.isInteger(cents) || cents <= 0) throw new HttpError(400, 'Amount must be more than $0');
     const id = Number(this.db.prepare('INSERT INTO tab_settlements (from_id, to_id, amount_cents, recorded_by) VALUES (?, ?, ?, ?)').run(fromId, toId, cents, userId).lastInsertRowid);
     const other = userId === fromId ? toId : fromId;
-    this.ctx.svc.notify(other, null, `✅ ${this.nameOf(fromId)} paid ${this.nameOf(toId)} ${money(cents)}. Logged on the Tab.`, '/#/tab');
+    this.ctx.svc.notify(other, null, `✅ ${this.nameOf(fromId)} paid ${this.nameOf(toId)} ${money(cents)}. Logged on the Tab.`, '/tab');
     this.refresh('tab');
     return { id };
   }
@@ -746,7 +784,7 @@ export class NightService {
     for (const r of this.db
       .prepare(
         `SELECT s.user_id AS debtor, e.payer_id AS creditor, s.amount_cents AS cents, e.created_at AS at
-         FROM tab_shares s JOIN tab_expenses e ON e.id = s.expense_id WHERE e.deleted_at IS NULL AND s.user_id != e.payer_id`,
+         FROM tab_shares s JOIN tab_expenses e ON e.id = s.expense_id WHERE s.user_id != e.payer_id`,
       )
       .all() as { debtor: number; creditor: number; cents: number; at: string }[])
       evs.push({ a: r.debtor, b: r.creditor, cents: r.cents, at: r.at });
@@ -775,33 +813,44 @@ export class NightService {
     return out;
   }
 
-  tab(viewerId: number, eventId: number | null) {
+  tab(viewerId: number, eventId: number | null, opts: { before?: string; limit?: number } = {}) {
     const names = new Map((this.db.prepare(`SELECT u.id, ${NAME} AS name FROM users u`).all() as { id: number; name: string }[]).map((r) => [r.id, r.name]));
     const nameOf = (id: number) => names.get(id) ?? 'Someone';
-    const nowMs = Date.now();
+    const nowMs = clock.now();
     const days = (iso: string) => Math.floor((nowMs - Date.parse(iso)) / (24 * HOUR));
+    const handles = new Map((this.db.prepare('SELECT user_id, venmo FROM tab_handles WHERE venmo IS NOT NULL').all() as { user_id: number; venmo: string }[]).map((r) => [r.user_id, r.venmo]));
+    const link = (to: number, cents: number, txn: 'pay' | 'charge') =>
+      handles.has(to) ? `https://venmo.com/${encodeURIComponent(handles.get(to)!)}?${new URLSearchParams({ txn, amount: (cents / 100).toFixed(2), note: 'Stall tab 🧾' })}` : null;
     const debts = this.debts().map((d) => ({
       ...d,
       from: nameOf(d.fromId),
       to: nameOf(d.toId),
       days: days(d.since),
-      venmoUrl: this.venmoLink(d.toId, d.cents, 'Stall tab 🧾'),
+      venmoUrl: link(d.toId, d.cents, 'pay'),
     }));
     const net = new Map<number, number>();
     for (const d of debts) {
       net.set(d.fromId, (net.get(d.fromId) ?? 0) - d.cents);
       net.set(d.toId, (net.get(d.toId) ?? 0) + d.cents);
     }
-    const expenses = (
-      eventId
-        ? this.db.prepare(`SELECT * FROM tab_expenses WHERE deleted_at IS NULL AND event_id = ? ORDER BY id DESC LIMIT 100`).all(eventId)
-        : this.db.prepare(`SELECT * FROM tab_expenses WHERE deleted_at IS NULL ORDER BY id DESC LIMIT 50`).all()
-    ) as { id: number; event_id: number | null; payer_id: number; created_by: number; description: string; amount_cents: number; created_at: string }[];
-    const sharesFor = this.db.prepare('SELECT user_id, amount_cents FROM tab_shares WHERE expense_id = ?');
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 50);
+    const where: string[] = [];
+    const params: (string | number)[] = [];
+    if (eventId) (where.push('event_id = ?'), params.push(eventId));
+    if (opts.before) (where.push('created_at < ?'), params.push(opts.before));
+    const expenses = this.db
+      .prepare(`SELECT * FROM tab_expenses ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC LIMIT ?`)
+      .all(...params, limit) as { id: number; event_id: number | null; payer_id: number; created_by: number; description: string; amount_cents: number; created_at: string }[];
+    const shares = expenses.length
+      ? (this.db.prepare(`SELECT expense_id, user_id, amount_cents FROM tab_shares WHERE expense_id IN (${expenses.map(() => '?').join(',')})`).all(...expenses.map((e) => e.id)) as {
+          expense_id: number; user_id: number; amount_cents: number;
+        }[])
+      : [];
     return {
-      myVenmo: this.venmoOf(viewerId),
+      myVenmo: handles.get(viewerId) ?? null,
+      nextBefore: expenses.length === limit ? expenses[expenses.length - 1].created_at : null,
       iOwe: debts.filter((d) => d.fromId === viewerId),
-      owedToMe: debts.filter((d) => d.toId === viewerId).map((d) => ({ ...d, venmoUrl: undefined, requestUrl: this.venmoLink(d.fromId, d.cents, 'Stall tab 🧾', 'charge') })),
+      owedToMe: debts.filter((d) => d.toId === viewerId).map((d) => ({ ...d, venmoUrl: undefined, requestUrl: link(d.fromId, d.cents, 'charge') })),
       // Debt Wall of Shame: every open debt, biggest × oldest first.
       wallOfShame: [...debts].sort((a, b) => b.cents * (b.days + 1) - a.cents * (a.days + 1)).slice(0, 20),
       balances: [...net.entries()].map(([userId, cents]) => ({ userId, name: nameOf(userId), cents })).sort((a, b) => a.cents - b.cents),
@@ -814,7 +863,7 @@ export class NightService {
         payer: nameOf(e.payer_id),
         createdAt: e.created_at,
         canDelete: e.created_by === viewerId || e.payer_id === viewerId,
-        shares: (sharesFor.all(e.id) as { user_id: number; amount_cents: number }[]).map((s) => ({ userId: s.user_id, name: nameOf(s.user_id), cents: s.amount_cents })),
+        shares: shares.filter((s) => s.expense_id === e.id).map((s) => ({ userId: s.user_id, name: nameOf(s.user_id), cents: s.amount_cents })),
       })),
     };
   }
@@ -827,10 +876,31 @@ export class NightService {
       const days = Math.floor((nowMs - Date.parse(d.since)) / (24 * HOUR));
       if (days < NUDGE_AFTER_DAYS || d.cents < 500) continue;
       if (!this.once(`tab-nudge:${d.fromId}:${d.toId}:${week}`)) continue;
-      this.ctx.svc.notify(d.fromId, null, `🧾 You’ve owed ${this.nameOf(d.toId)} ${money(d.cents)} for ${days} days. The Wall of Shame sees you.`, '/#/tab');
+      this.ctx.svc.notify(d.fromId, null, `🧾 You’ve owed ${this.nameOf(d.toId)} ${money(d.cents)} for ${days} days. The Wall of Shame sees you.`, '/tab');
       sent++;
     }
     return { sent };
+  }
+
+  // ======================================================== member removal
+
+  /**
+   * Night-of data is ephemeral except money. Home Safe rows, check-ins, polls, cooked
+   * reports and drafts go on 'delete'; 'anonymize' and 'keep' leave them (names come
+   * from the users row, which foundation anonymizes). The Tab is never erased: a removed
+   * member's debts still exist.
+   */
+  onMemberRemoved(userId: number, policy: 'keep' | 'anonymize' | 'delete') {
+    // Whatever the policy, they're off tonight's roll call and nobody's buddy.
+    this.db.prepare(`DELETE FROM night_members WHERE user_id = ? AND session_id IN (SELECT id FROM night_sessions WHERE status = 'active')`).run(userId);
+    this.db.prepare(`UPDATE night_members SET buddy_id = NULL WHERE buddy_id = ? AND session_id IN (SELECT id FROM night_sessions WHERE status = 'active')`).run(userId);
+    this.db.prepare('DELETE FROM draft_jail WHERE user_id = ?').run(userId);
+    this.db.prepare('DELETE FROM tab_handles WHERE user_id = ?').run(userId);
+    if (policy !== 'delete') return;
+    for (const r of this.db.prepare('SELECT id FROM night_checkins WHERE user_id = ?').all(userId) as { id: number }[]) this.dropFeed('night_checkin', r.id);
+    this.db.prepare('DELETE FROM night_checkins WHERE user_id = ?').run(userId);
+    this.db.prepare('DELETE FROM cooked_reports WHERE user_id = ?').run(userId);
+    this.db.prepare('DELETE FROM night_poll_votes WHERE user_id = ?').run(userId);
   }
 
   // ======================================================== Draft Jail
@@ -841,16 +911,16 @@ export class NightService {
     const text = clean(body.body, 'body', 1000);
     const minutes = body.minutes === undefined ? 30 : Number(body.minutes);
     if (!Number.isInteger(minutes) || minutes < 5 || minutes > 240) throw new HttpError(400, 'Timer must be 5–240 minutes');
-    const closesAt = new Date(Date.now() + minutes * MIN).toISOString();
+    const closesAt = new Date(clock.now() + minutes * MIN).toISOString();
     const id = Number(this.db.prepare('INSERT INTO draft_jail (user_id, recipient, body, closes_at) VALUES (?, ?, ?, ?)').run(userId, recipient, text, closesAt).lastInsertRowid);
-    this.ctx.svc.notifyMembers(`🚔 ${this.nameOf(userId)} put a text to ${recipient} in Draft Jail. Send it, absolutely not, or wait till noon?`, '/#/tonight', userId);
+    this.ctx.svc.notifyMembers(`🚔 ${this.nameOf(userId)} put a text to ${recipient} in Draft Jail. Send it, absolutely not, or wait till noon?`, '/tonight', userId);
     this.refresh();
     return { id, closesAt };
   }
 
   voteDraft(draftId: number, userId: number, choice: unknown) {
     if (choice !== 'send' && choice !== 'no' && choice !== 'noon') throw new HttpError(400, 'Pick send, no or noon');
-    this.closeDueDrafts(Date.now());
+    this.closeDueDrafts(clock.now());
     const d = this.db.prepare('SELECT user_id FROM draft_jail WHERE id = ?').get(draftId) as { user_id: number } | undefined;
     if (!d) throw new HttpError(404, 'That draft has already been destroyed');
     this.db
@@ -885,7 +955,7 @@ export class NightService {
     const deleted = this.db.prepare('DELETE FROM draft_jail WHERE id = ?').run(draftId).changes; // votes cascade
     if (!deleted) return;
     const line = { send: '📤 The group says send it. On your head be it.', no: '🚫 The group says absolutely not. Put the phone down.', noon: '🕛 The group says wait till noon.' }[verdict];
-    this.ctx.svc.notify(d.user_id, null, `${line} (${t.send} send · ${t.no} no · ${t.noon} noon). The draft has been destroyed.`, '/#/tonight');
+    this.ctx.svc.notify(d.user_id, null, `${line} (${t.send} send · ${t.no} no · ${t.noon} noon). The draft has been destroyed.`, '/tonight');
     this.refresh();
   }
 
@@ -905,7 +975,7 @@ export class NightService {
   }
 
   drafts(viewerId: number) {
-    this.closeDueDrafts(Date.now());
+    this.closeDueDrafts(clock.now());
     return (this.db.prepare('SELECT id FROM draft_jail ORDER BY id DESC LIMIT 20').all() as { id: number }[]).map((r) => this.draftView(r.id, viewerId));
   }
 
@@ -945,7 +1015,7 @@ export class NightService {
             const msg = c.user_id === booker.user_id
               ? `🚕 Rideshare Roulette picked you. Book the car to ${group[0].heading}${others.length ? ` for you + ${others.join(', ')}` : ''}.`
               : `🚕 ${booker.name} is booking your car to ${group[0].heading}${others.length > 1 ? ` (with ${others.filter((n) => n !== booker.name).join(', ')})` : ''}.`;
-            this.ctx.svc.notify(c.user_id, null, msg, '/#/tonight');
+            this.ctx.svc.notify(c.user_id, null, msg, '/tonight');
           }
         }
       }
@@ -981,7 +1051,7 @@ export class NightService {
       const due = this.db.prepare('SELECT user_id FROM night_members WHERE session_id = ? AND hydrate = 1 AND home_at IS NULL').all(s.id) as { user_id: number }[];
       for (const m of due) {
         if (!this.once(`hydrate:${s.id}:${m.user_id}:${slot}`)) continue;
-        this.ctx.svc.notify(m.user_id, null, ['💧 water. now.', '💧 hydrate or diedrate', '💧 one glass of water. we’re watching.'][slot % 3], '/#/tonight');
+        this.ctx.svc.notify(m.user_id, null, ['💧 water. now.', '💧 hydrate or diedrate', '💧 one glass of water. we’re watching.'][slot % 3], '/tonight');
         sent++;
       }
     }
