@@ -4,6 +4,7 @@ import { api, h, toast, route, go, shell, state, empty, ago, head, fill, mount a
 import { photoSection } from './photos.js';
 import { eventPosts } from './feed.js';
 import { nightPanel } from './night.js';
+import { seasonLinks } from './season.js';
 
 // Styles live next to the view; CSP allows same-origin stylesheets.
 if (!document.querySelector('link[data-events-css]')) {
@@ -162,6 +163,7 @@ route('/events', async (_p, alive) => {
       { title: 'Events', tab: 'events', fab: false },
       h('div', { class: 'page-head row-between' }, h('div', {}, h('div', { class: 'kicker' }, 'Meet me in the Stall'), h('h1', {}, 'Events')),
         h('div', { class: 'ev-actions' },
+          h('button', { class: 'btn sm ghost', onclick: () => go('/season') }, '🏈 Season'),
           h('button', { class: 'btn sm ghost', onclick: () => go('/events/new?kind=spontaneous') }, '📍 Out now'),
           h('button', { class: 'btn sm hot', onclick: () => go('/events/new') }, '💌 Host'))),
       seg,
@@ -304,7 +306,32 @@ route('/events/new(?:\\?.*)?', async () => {
     err,
     submit,
   );
-  mount(shell({ title: 'Host', tab: 'events', back: '/events', fab: false }, head('New event', 'Throw something'), form));
+  // Templates (admin-managed): one tap fills the form.
+  const tplBox = h('div', { class: 'seg' });
+  api('/season/templates').then(({ templates }) => {
+    fill(tplBox, templates.map((t) => h('button', { type: 'button', onclick: () => applyTemplate(t) }, t.name)));
+  }).catch(() => tplBox.remove());
+  const applyTemplate = (t) => {
+    const set = (n, v) => { const el = form.elements[n]; if (el && v != null) el.value = v; };
+    const radio = form.querySelector(`input[name=kind][value="${t.kind}"]`);
+    if (radio) radio.checked = true;
+    set('title', t.title);
+    set('vibe', t.vibe);
+    set('details', t.details);
+    set('recurrence', t.recurrence || '');
+    const d = new Date();
+    if (t.weekday != null) d.setDate(d.getDate() + ((t.weekday - d.getDay() + 7) % 7 || 7));
+    else d.setDate(d.getDate() + 1);
+    d.setHours(t.start_hour ?? 21, 0, 0, 0);
+    startInput.value = localInput(d);
+    realInput.value = localInput(new Date(d.getTime() + (t.kind === 'game' ? 0 : 90 * 60000)));
+    stageList.splice(0, stageList.length, ...(t.stages || []));
+    bringList.splice(0, bringList.length, ...(t.bring || []));
+    chipEditor(stagesBox, stageList, 'Dinner, Bar, Club, Afters…');
+    chipEditor(bringBox, bringList, 'Wine, a speaker…');
+    toast(`${t.name} template loaded`);
+  };
+  mount(shell({ title: 'Host', tab: 'events', back: '/events', fab: false }, head('New event', 'Throw something'), h('p', { class: 'small muted' }, 'Start from a template'), tplBox, form));
 });
 
 // ---------------------------------------------------------------- detail
@@ -476,6 +503,7 @@ route('/events/:id', async ({ id }, alive) => {
       e.cancelled ? h('div', { class: 'callout quiet' }, h('strong', {}, '🪦 Cancelled'), h('p', { class: 'small muted' }, 'This one isn’t happening.')) : null,
       archive,
       rsvpBox,
+      seasonLinks(e),
       e.phase === 'live' ? extras.night : null,
       stages,
       people,

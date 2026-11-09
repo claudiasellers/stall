@@ -111,3 +111,14 @@
   .ev-rsvp { grid-template-columns: 1fr; }
   .ev-rate { grid-template-columns: repeat(5, 1fr); }
 }
+
+/* Season: games, squares */
+.ev-game { padding: 10px 0; border-bottom: 1px solid var(--line); color: inherit; }
+.ev-num { width: 84px; flex: 0 0 auto; height: 38px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--glass); }
+.sq-grid { display: grid; grid-template-columns: repeat(11, 1fr); gap: 2px; }
+.sq-h { display: grid; place-items: center; font-size: 11px; font-weight: 700; color: var(--faint); aspect-ratio: 1; }
+.sq { aspect-ratio: 1; border-radius: 6px; border: 1px solid var(--line); background: var(--glass); padding: 0; font-size: 12px; cursor: pointer; }
+.sq.taken { background: var(--glass-2); }
+.sq.mine { background: var(--violet); color: #fff; }
+.sq.win { background: var(--lime); color: var(--ink); box-shadow: 0 0 0 2px var(--lime); }
+.ev-detail select { height: 38px; border-radius: 12px; border: 1px solid var(--line); background: var(--glass); padding: 0 8px; }
