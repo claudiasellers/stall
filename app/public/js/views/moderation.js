@@ -70,7 +70,7 @@ route('/admin/moderation', async () => {
         h('div', { class: 'kicker' }, 'Photos'),
         photos
           ? (photos.photos || []).length
-            ? h('ul', { class: 'mod' }, photos.photos.map((p) => row(p.thumbUrl ? h('img', { src: p.thumbUrl, alt: '', class: 'mod-thumb' }) : '📷', `${p.uploader || 'Someone'}${p.eventTitle ? ` · ${p.eventTitle}` : ''}`, ago(p.takenAt || p.createdAt), [del(`/photos/${p.id}`, 'photo', reload)])))
+            ? h('ul', { class: 'mod' }, photos.photos.map((p) => row(p.thumbUrl ? h('img', { src: p.thumbUrl, alt: '', class: 'mod-thumb' }) : '🎞️', `${p.uploader || 'Someone'}${p.eventTitle ? ` · ${p.eventTitle}` : p.night ? ` · ${p.night}` : ''}`, `${p.thumbUrl ? '' : '🎞️ not developed · '}${ago(p.takenAt || p.createdAt)}`, [del(`/photos/${p.id}`, 'photo', reload)])))
             : empty('📷', 'No photos')
           : h('p', { class: 'small' }, 'Photo moderation needs the photos module’s admin list (GET /api/v1/admin/photos).'),
       ),
