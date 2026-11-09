@@ -409,12 +409,12 @@ function tabSummaryCard(tab) {
   const owe = tab.iOwe.reduce((a, d) => a + d.cents, 0);
   const owed = tab.owedToMe.reduce((a, d) => a + d.cents, 0);
   return h(
-    'a',
-    { class: 'card tab-summary', href: '#/tab' },
+    'div',
+    { class: 'card tab-summary' },
     h('div', { class: 'kicker' }, '🧾 The tab'),
     h('div', { class: 'row-between' }, h('span', {}, 'You owe ', h('strong', {}, money(owe))), h('span', {}, 'Owed to you ', h('strong', {}, money(owed)))),
     tab.wallOfShame[0] ? h('p', { class: 'small' }, `Wall of Shame leader: ${tab.wallOfShame[0].from} owes ${tab.wallOfShame[0].to} ${money(tab.wallOfShame[0].cents)} (${tab.wallOfShame[0].days}d)`) : null,
-    h('span', { class: 'small' }, 'Open the tab →'),
+    h('div', { class: 'row-wrap' }, h('a', { class: 'btn ghost sm', href: '#/tab' }, '🧾 Open the tab'), h('a', { class: 'btn ghost sm', href: '#/wagers' }, '🎲 Wager Book'), h('a', { class: 'btn ghost sm', href: '#/dating' }, '💘 Dating')),
   );
 }
 
@@ -593,4 +593,77 @@ route('/tonight/poll/:id', async ({ id }) => {
 route('/tab', async () => {
   setRefresh(() => go('/tab'));
   mount(shell({ title: 'The Tab', tab: 'tonight', back: '/tonight' }, ...(await tabView(null))));
+});
+
+// ------------------------------------------------------------------ Wager Book
+
+function wagerCard(w, reload) {
+  const bet = (side) => async () => (await act(() => api(`/wagers/${w.id}/bet`, { method: 'POST', body: { side } })), reload());
+  const call = (winner) => async () => {
+    const label = winner === 'void' ? 'call it off' : `call it for “${w.sides.find((s) => s.key === winner).label}”`;
+    if (!confirm(`Sure you want to ${label}? Money lands on the Tab.`)) return;
+    await act(() => api(`/wagers/${w.id}/settle`, { method: 'POST', body: { winner } }), '🎲 Settled');
+    reload();
+  };
+  return h(
+    'div',
+    { class: `poll wager ${w.settled ? 'closed' : ''}` },
+    h('div', { class: 'row-between' }, h('strong', {}, w.claim), h('span', { class: 'small' }, `${money(w.stakeCents)} a head`)),
+    w.sides.map((s) =>
+      h(
+        'button',
+        { class: `poll-opt ${w.mySide === s.key ? 'mine' : ''} ${w.winner === s.key ? 'winner' : ''}`, disabled: w.settled || w.locked, onclick: bet(s.key) },
+        h('span', { class: 'lbl' }, w.winner === s.key ? '🏆 ' : '', s.label),
+        h('span', { class: 'n' }, money(s.pot), s.people.length ? h('small', {}, ` ${s.people.join(', ')}`) : null),
+      ),
+    ),
+    h(
+      'div',
+      { class: 'row-wrap small' },
+      `by ${w.by} · ${ago(w.createdAt)}`,
+      w.settled ? (w.winner === 'void' ? ' · called off' : ' · settled onto the Tab') : w.locked ? ' · locked' : w.locksAt ? ` · locks ${clock(w.locksAt)}` : null,
+    ),
+    w.mineToCall
+      ? h('div', { class: 'row-wrap' }, h('button', { class: 'btn sm', onclick: call('a') }, `${w.sides[0].label} won`), h('button', { class: 'btn sm', onclick: call('b') }, `${w.sides[1].label} won`), h('button', { class: 'btn ghost sm', onclick: call('void') }, 'Void'))
+      : null,
+  );
+}
+
+function wagerForm(reload) {
+  const claim = h('input', { placeholder: 'Max Irish-goodbyes before midnight', maxlength: '140', required: true });
+  const a = h('input', { placeholder: 'Yes', maxlength: '40' });
+  const b = h('input', { placeholder: 'No', maxlength: '40' });
+  const stake = h('input', { type: 'number', inputmode: 'decimal', min: '1', step: '1', value: '20', 'aria-label': 'Stake per person' });
+  const side = h('select', { 'aria-label': 'Your side' }, h('option', { value: 'a' }, 'I’m on the first side'), h('option', { value: 'b' }, 'I’m on the second side'));
+  return h(
+    'form',
+    {
+      class: 'card night-form',
+      onsubmit: async (e) => {
+        e.preventDefault();
+        await act(() => api('/wagers', { method: 'POST', body: { claim: claim.value, sideA: a.value, sideB: b.value, stake: Number(stake.value), side: side.value } }), '🎲 Bet’s open');
+        reload();
+      },
+    },
+    h('strong', {}, 'Open a bet'),
+    claim,
+    h('div', { class: 'row-wrap' }, a, h('span', { class: 'small' }, 'vs'), b),
+    h('div', { class: 'row-wrap' }, h('span', { class: 'small' }, '$'), stake, side),
+    h('p', { class: 'small' }, 'Losers’ stakes split across the winners and land on the Tab.'),
+    h('button', { class: 'btn' }, 'Open it'),
+  );
+}
+
+route('/wagers', async () => {
+  const { wagers } = await api('/wagers');
+  const reload = () => go('/wagers');
+  setRefresh(reload);
+  mount(
+    shell(
+      { title: 'Wager Book', tab: 'tonight', back: '/tonight' },
+      head('Put your money where your mouth is', '🎲 Wager Book', 'Two sides, same stake, settled onto the Tab.'),
+      wagerForm(reload),
+      wagers.length ? h('section', { class: 'card' }, wagers.map((w) => wagerCard(w, reload))) : empty('🎲', 'No bets yet', 'Somebody has to say something stupid first.'),
+    ),
+  );
 });
