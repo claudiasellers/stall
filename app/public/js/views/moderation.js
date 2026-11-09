@@ -70,7 +70,7 @@ route('/admin/moderation', async () => {
         h('div', { class: 'kicker' }, 'Photos'),
         photos
           ? (photos.photos || []).length
-            ? h('ul', { class: 'mod' }, photos.photos.map((p) => row('📷', `#${p.id}${p.title ? ` · ${p.title}` : ''}`, `${p.uploader || ''} · ${ago(p.takenAt || p.createdAt)}`, [del(`/photos/${p.id}`, 'photo', reload)])))
+            ? h('ul', { class: 'mod' }, photos.photos.map((p) => row(p.thumbUrl ? h('img', { src: p.thumbUrl, alt: '', class: 'mod-thumb' }) : '📷', `${p.uploader || 'Someone'}${p.eventTitle ? ` · ${p.eventTitle}` : ''}`, ago(p.takenAt || p.createdAt), [del(`/photos/${p.id}`, 'photo', reload)])))
             : empty('📷', 'No photos')
           : h('p', { class: 'small' }, 'Photo moderation needs the photos module’s admin list (GET /api/v1/admin/photos).'),
       ),
@@ -80,7 +80,7 @@ route('/admin/moderation', async () => {
         h('div', { class: 'kicker' }, 'Vetoes'),
         vetoes
           ? (vetoes.vetoes || []).length
-            ? h('ul', { class: 'mod' }, vetoes.vetoes.map((v) => row('🙅', `${v.by || v.name || 'Someone'} vetoed a photo`, `${v.event ? `${v.event} · ` : ''}${ago(v.createdAt || v.at)}`, [])))
+            ? h('ul', { class: 'mod' }, vetoes.vetoes.map((v) => row('🙅', `${v.name || 'Someone'} vetoed a photo`, `${v.eventTitle || v.night || ''}${v.eventTitle || v.night ? ' · ' : ''}${ago(v.createdAt)}`, [])))
             : empty('🙅', 'No vetoes')
           : h('p', { class: 'small' }, 'Veto history needs the photos module’s admin list (GET /api/v1/admin/vetoes).'),
       ),

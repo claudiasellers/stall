@@ -62,3 +62,4 @@ input[type=range] { width: 100%; accent-color: var(--pink); }
 .mod-row { display: grid; grid-template-columns: 28px 1fr; gap: 6px 10px; align-items: start; }
 .mod-row > .row-wrap { grid-column: 2; }
 .btn.danger { color: var(--red); }
+.mod-thumb { width: 28px; height: 28px; object-fit: cover; border-radius: 6px; }
