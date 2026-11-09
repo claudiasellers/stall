@@ -5,6 +5,7 @@ import './js/views/night.js';
 import './js/views/dating.js';
 import './js/views/moderation.js';
 import './js/views/events.js';
+import './js/views/season.js';
 import './js/views/feed.js';
 import './js/views/lore.js';
 import './js/views/photos.js';

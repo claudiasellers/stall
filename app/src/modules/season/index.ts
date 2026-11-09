@@ -9,7 +9,8 @@ import { HttpError } from '../../service.ts';
 import type { ModuleCtx, StallModule } from '../types.ts';
 import { SEASON_MIGRATIONS } from './schema.ts';
 
-const NAME = 'COALESCE(u.display_name, u.username)';
+// Every name read goes through this, so the 'anonymize' removal policy holds everywhere.
+const NAME = `CASE WHEN u.id IN (SELECT user_id FROM season_anonymized) THEN 'Former member' ELSE COALESCE(u.display_name, u.username) END`;
 export const AWARDS = ['Best outfit', 'Worst decision', 'Most sleep', 'Most fun', 'MVP', 'Liability'];
 
 const me = (req: Request) => {
@@ -176,7 +177,9 @@ function routes(ctx: ModuleCtx) {
     const draft = db.prepare('SELECT * FROM trip_drafts WHERE event_id = ?').get(eid) as { mode: string; draft_order: string; started_at: string; done_at: string | null } | undefined;
     let onClock: number | null = null;
     if (draft && !draft.done_at) {
-      const order = JSON.parse(draft.draft_order) as number[];
+      // Skip anyone removed since the draft started, so one departure can't stall it.
+      const active = new Set(people.map((p) => p.id));
+      const order = (JSON.parse(draft.draft_order) as number[]).filter((u) => active.has(u));
       onClock = order.find((u) => !picks.some((p) => p.userId === u)) ?? null;
     }
     const kitty = db.prepare(`SELECT k.id, k.amount_cents AS amountCents, k.memo, k.created_at AS createdAt, k.tab_expense_id AS tabExpenseId, ${NAME} AS payer FROM trip_kitty k JOIN users u ON u.id = k.payer_id WHERE k.event_id = ? ORDER BY k.id DESC`).all(eid) as { amountCents: number }[];
@@ -487,7 +490,11 @@ export const module: StallModule = {
   migrations: SEASON_MIGRATIONS,
   routes,
   onMemberRemoved: (ctx, userId, policy) => {
-    if (policy !== 'delete') return;
+    if (policy === 'keep') return;
+    if (policy === 'anonymize') {
+      ctx.db.prepare('INSERT OR IGNORE INTO season_anonymized (user_id) VALUES (?)').run(userId);
+      return;
+    }
     for (const t of ['game_picks', 'game_talk', 'fan_teams', 'squares', 'bar_ratings', 'date_poll_marks', 'trip_room_picks'])
       ctx.db.prepare(`DELETE FROM ${t} WHERE user_id = ?`).run(userId);
     ctx.db.prepare('DELETE FROM trip_award_votes WHERE voter_id = ? OR nominee_id = ?').run(userId, userId);

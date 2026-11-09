@@ -196,4 +196,14 @@ export const SEASON_MIGRATIONS: StallModule['migrations'] = [
     CREATE INDEX bar_ratings_user ON bar_ratings(user_id);
     `,
   },
+  {
+    id: 'season-002',
+    sql: `
+    -- Members removed with the 'anonymize' policy: their season content stays but
+    -- every read shows "Former member" instead of their name.
+    CREATE TABLE season_anonymized (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE
+    );
+    `,
+  },
 ];

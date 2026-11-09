@@ -783,7 +783,34 @@ export class EventsService {
          WHERE f.event_id = ? AND f.kind = 'rsvp_change' AND f.body LIKE '%→%' GROUP BY f.actor_id ORDER BY n DESC LIMIT 1`,
       )
       .get(e.id) as { name: string; n: number } | undefined;
+    // Who left without saying bye (posts lane, kind 'irish_goodbye').
+    const leftEarly = tables.has('posts')
+      ? (this.db
+          .prepare(
+            `SELECT COALESCE(CASE WHEN u.removed_at IS NULL THEN ${NAME} END, p.subject_label, 'Someone') AS name, u.emoji, p.created_at AS at
+             FROM posts p LEFT JOIN users u ON u.id = p.subject_id
+             WHERE p.event_id = ? AND p.kind = 'irish_goodbye' ORDER BY p.created_at LIMIT 20`,
+          )
+          .all(e.id) as { name: string; emoji: string | null; at: string }[])
+      : null;
+    // The night's best line: the quote with the most reactions.
+    const topQuote = tables.has('posts') && tables.has('reactions')
+      ? ((this.db
+          .prepare(
+            `SELECT p.id, p.body, COALESCE(CASE WHEN u.removed_at IS NULL THEN ${NAME} END, p.subject_label, 'Unknown') AS speaker,
+               (SELECT COUNT(*) FROM reactions x WHERE x.target_type = 'post' AND x.target_id = p.id) AS reactions
+             FROM posts p LEFT JOIN users u ON u.id = p.subject_id
+             WHERE p.event_id = ? AND p.kind = 'quote' ORDER BY reactions DESC, p.id ASC LIMIT 1`,
+          )
+          .get(e.id) as { id: number; body: string; speaker: string; reactions: number } | undefined) ?? null)
+      : null;
+    const tabTotalCents = tables.has('tab_expenses')
+      ? Number((this.db.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS c FROM tab_expenses WHERE event_id = ?').get(e.id) as { c: number }).c)
+      : null;
     return {
+      leftEarly,
+      topQuote,
+      tabTotalCents,
       rating: r.n ? Math.round(Number(r.avg) * 10) / 10 : null,
       ratings: Number(r.n),
       myRating: mine?.score ?? null,
