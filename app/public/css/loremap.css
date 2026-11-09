@@ -1,0 +1,30 @@
+/* Lore Map. Prefixed lm-. */
+.lm-muted { color: var(--muted); font-size: 14px; }
+.lm-wrap { border-radius: 26px; overflow: hidden; margin: 12px 0; border: 1px solid var(--line); }
+.lm-map { display: block; width: 100%; height: auto; touch-action: manipulation; }
+.lm-map.moving { cursor: crosshair; outline: 3px dashed var(--yellow); outline-offset: -3px; }
+.lm-water { fill: #1a1030; }
+.lm-land { fill: #2d1d4a; stroke: #4b3378; stroke-width: 3; stroke-linejoin: round; }
+.lm-nj { fill: #22163a; }
+.lm-mn { fill: #3a2560; }
+.lm-boro { fill: rgb(255 255 255 / 22%); font: 800 26px var(--display, system-ui); letter-spacing: 0.12em; text-anchor: middle; pointer-events: none; }
+.lm-pin { cursor: pointer; }
+.lm-pin circle { fill: var(--sky, #6fd3ff); stroke: #fff; stroke-width: 4; filter: drop-shadow(0 4px 6px rgb(0 0 0 / 45%)); }
+.lm-pin.hot circle { fill: var(--pink, #ff4fa3); }
+.lm-pin:focus-visible circle { stroke: var(--yellow, #ffd23f); stroke-width: 6; }
+.lm-pin-n { fill: #fff; font: 800 18px var(--body, system-ui); pointer-events: none; }
+.lm-pin-label { fill: #fff; font: 700 20px var(--body, system-ui); paint-order: stroke; stroke: #120a1f; stroke-width: 5px; pointer-events: none; }
+.lm-add, .lm-form { display: grid; gap: 8px; margin: 12px 0; }
+.lm-add { grid-template-columns: 1fr auto; }
+.lm-add input { grid-column: 1 / -1; }
+.lm-add input, .lm-add select, .lm-form input, .lm-form textarea {
+  padding: 10px 14px; border-radius: 14px; border: 1px solid var(--line); background: var(--glass); color: var(--text); font: inherit;
+}
+.lm-sheet:empty { display: none; }
+.lm-sheet { border-radius: 24px; padding: 16px; background: var(--glass); border: 1px solid var(--line); margin: 12px 0 90px; display: grid; gap: 12px; }
+.lm-sheet-head { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: start; }
+.lm-x { width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: transparent; color: var(--text); cursor: pointer; }
+.lm-incidents { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.lm-incidents li { border-left: 3px solid var(--pink); padding-left: 12px; display: grid; gap: 3px; }
+.lm-inc-when { font: 800 11px/1 var(--body); letter-spacing: 0.1em; text-transform: uppercase; color: var(--yellow); }
+.lm-del { border: 0; background: transparent; color: var(--faint); cursor: pointer; margin-left: 6px; }
