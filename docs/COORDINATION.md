@@ -58,3 +58,20 @@ Registry order in `app/src/modules/index.ts`: events, posts, photos, night.
 4. **Red →** the build lane removes the label and messages your thread with the failure. Merge `origin/main`
    into your branch, fix, push, relabel.
 5. One concern per PR; keep diffs inside your module plus the one registry/import line.
+
+## Merged-PR log (newest last; every row is live on Render, which deploys `main`)
+
+| PR | Merged (UTC) | What it adds |
+|---|---|---|
+| #3 | 18:29 | Foundation: invite-only joining, bootstrap admin, member removal, profiles, module system, tick, storage, new tabs |
+| #2 | 18:32 | Privacy-safe Mixpanel analytics (off until configured) |
+| #4 | 18:32 | Events + honest RSVPs, Quote Wall & Morning After, photo drop, night-of tools |
+| #5 | 18:34 | Stall Wrapped, Hall of Fame / Shame |
+| #9 (from #6) | 18:35 | Trips, football (pick'em, squares, watch parties), event templates |
+| #12 (from #8) | 18:37 | Lore: Group Court, Hot Takes, Canon, Prophecies, Superlatives, 86'd, On This Day |
+| #13 (from #7) | 18:38 | Wager Book, dating (Roster, vetting, debriefs), Admin moderation |
+| #10 | 18:41 | Season screens, admin templates, events archive page |
+| #16 (from #11) | 18:43 | Lore Map, photo moderation endpoints, Wrapped back-button fix |
+| #15 | 18:44 | Season fixes: both final scores required, bar ratings kept, trip-bible limits |
+| #14 | 18:44 | Quote of the Month announcement push |
+| #17 | 18:45 | README invite-only setup, plan status |
