@@ -4,12 +4,14 @@
 // else, not even the uploader's own shots: it is a disposable camera.
 import { randomBytes } from 'node:crypto';
 import { tx, now } from '../../db.ts';
+import { clock } from '../../clock.ts';
+import { MAX_PHOTO_BYTES, queueStorageDelete } from '../../storage.ts';
 import { HttpError } from '../../service.ts';
 import { nightOf, unlockAt, monthDay, localDate } from './clock.ts';
-import type { PhotoCtx } from './index.ts';
+import type { ModuleCtx } from '../types.ts';
 
 export const LIMITS = {
-  originalBytes: 25 * 1024 * 1024,
+  originalBytes: MAX_PHOTO_BYTES,
   displayBytes: 4 * 1024 * 1024,
   thumbBytes: 600 * 1024,
   perUserPerNight: 300,
@@ -25,15 +27,27 @@ type PhotoRow = {
   original_key: string; display_key: string; thumb_key: string; mime: string; width: number; height: number;
   bytes: number; taken_at: string; created_at: string; ready_at: string | null;
 };
+type CardRow = PhotoRow & { uploader_name: string; title: string | null };
+
+/** Photos plus uploader name and winning caption, in one statement (no N+1). Bind VOTE first. */
+const SELECT_CARD = `
+  SELECT p.*, COALESCE(u.display_name, u.username) AS uploader_name,
+    (SELECT c.body FROM photo_captions c
+       JOIN reactions r ON r.target_type = 'caption' AND r.target_id = c.id AND r.emoji = ?
+     WHERE c.photo_id = p.id GROUP BY c.id ORDER BY COUNT(*) DESC, c.id ASC LIMIT 1) AS title
+  FROM photos p JOIN users u ON u.id = p.uploader_id`;
 export type Roll = { eventId: number | null; night: string };
 
 const newKey = (ext: string) => `m/${randomBytes(16).toString('hex')}.${ext}`;
 
 export class Photos {
-  constructor(private ctx: PhotoCtx) {}
+  private ctx: ModuleCtx;
+  constructor(ctx: ModuleCtx) {
+    this.ctx = ctx;
+  }
   private get db() { return this.ctx.db; }
   private get tz(): string { return this.ctx.cfg.houseTz || 'America/New_York'; }
-  private get unlockHour(): number { return Number(this.ctx.house?.photoUnlockHour ?? 11); }
+  private get unlockHour(): number { return this.ctx.house().photoUnlockHour; }
 
   // ------------------------------------------------------------- rolls & time
   /** The night a roll belongs to: the event's start night, else the stored night. */
@@ -56,7 +70,7 @@ export class Photos {
     return unlockAt(this.rollNight(r), this.tz, this.unlockHour);
   }
 
-  isDeveloped(r: Roll, t = Date.now()): boolean {
+  isDeveloped(r: Roll, t = clock.now()): boolean {
     return t >= this.unlockAt(r);
   }
 
@@ -85,7 +99,7 @@ export class Photos {
       )
       .get(viewerId, ...args) as { n: number; shooters: number; mine: number };
     const unlock = this.unlockAt(r);
-    const developed = Date.now() >= unlock;
+    const developed = clock.now() >= unlock;
     const ev = r.eventId ? this.event(r.eventId) : undefined;
     const roll = {
       eventId: r.eventId,
@@ -99,46 +113,28 @@ export class Photos {
     };
     if (!developed) return { roll, photos: [] };
     const rows = this.db
-      .prepare(`SELECT p.* FROM photos p WHERE ${where} AND p.status = 'ready' ORDER BY p.taken_at, p.id`)
-      .all(...args) as PhotoRow[];
+      .prepare(`${SELECT_CARD} WHERE ${where} AND p.status = 'ready' ORDER BY p.taken_at, p.id LIMIT 500`)
+      .all(VOTE, ...args) as CardRow[];
     return { roll, photos: await Promise.all(rows.map((p) => this.card(p, viewerId))) };
   }
 
   /** Summary card: thumb only; the display image is fetched on open. */
-  private async card(p: PhotoRow, viewerId: number) {
-    const title = this.title(p.id);
+  private async card(p: CardRow, viewerId: number) {
     return {
       id: p.id,
       width: p.width,
       height: p.height,
       thumbUrl: await this.ctx.storage.readUrl(p.thumb_key),
-      title: title?.body ?? null,
-      uploader: this.name(p.uploader_id),
+      title: p.title,
+      uploader: p.uploader_name,
       mine: p.uploader_id === viewerId,
       takenAt: p.taken_at,
     };
   }
 
-  /** Top-voted caption with at least one vote; ties go to the earliest. */
-  private title(photoId: number) {
-    return this.db
-      .prepare(
-        `SELECT c.id, c.body, COUNT(r.user_id) AS votes FROM photo_captions c
-         JOIN reactions r ON r.target_type = 'caption' AND r.target_id = c.id AND r.emoji = ?
-         WHERE c.photo_id = ? GROUP BY c.id ORDER BY votes DESC, c.id ASC LIMIT 1`,
-      )
-      .get(VOTE, photoId) as { id: number; body: string; votes: number } | undefined;
-  }
-
-  private name(userId: number): string {
-    const u = this.db.prepare('SELECT username, display_name FROM users WHERE id = ?').get(userId) as
-      | { username: string; display_name: string | null } | undefined;
-    return u?.display_name || u?.username || 'someone';
-  }
-
   /** A photo the viewer may see: ready, and its roll developed. 404 otherwise, so locked photos don't leak. */
-  private visible(id: number): PhotoRow {
-    const p = this.db.prepare(`SELECT * FROM photos WHERE id = ? AND status = 'ready'`).get(id) as PhotoRow | undefined;
+  private visible(id: number): CardRow {
+    const p = this.db.prepare(`${SELECT_CARD} WHERE p.id = ? AND p.status = 'ready'`).get(VOTE, id) as CardRow | undefined;
     if (!p || !this.isDeveloped(this.rollOf(p))) throw new HttpError(404, 'Photo not found');
     return p;
   }
@@ -147,12 +143,12 @@ export class Photos {
     const p = this.visible(id);
     const captions = this.db
       .prepare(
-        `SELECT c.id, c.body, c.user_id, c.created_at,
+        `SELECT c.id, c.body, c.user_id, c.created_at, COALESCE(u.display_name, u.username) AS author,
                 (SELECT COUNT(*) FROM reactions r WHERE r.target_type = 'caption' AND r.target_id = c.id AND r.emoji = ?) AS votes,
                 EXISTS (SELECT 1 FROM reactions r WHERE r.target_type = 'caption' AND r.target_id = c.id AND r.emoji = ? AND r.user_id = ?) AS voted
-         FROM photo_captions c WHERE c.photo_id = ? ORDER BY votes DESC, c.id ASC`,
+         FROM photo_captions c JOIN users u ON u.id = c.user_id WHERE c.photo_id = ? ORDER BY votes DESC, c.id ASC LIMIT 200`,
       )
-      .all(VOTE, VOTE, viewerId, id) as { id: number; body: string; user_id: number; created_at: string; votes: number; voted: number }[];
+      .all(VOTE, VOTE, viewerId, id) as { id: number; body: string; user_id: number; author: string; created_at: string; votes: number; voted: number }[];
     const top = captions.find((c) => c.votes > 0);
     return {
       photo: {
@@ -164,7 +160,7 @@ export class Photos {
         titleCaptionId: top?.id ?? null,
       },
       captions: captions.map((c) => ({
-        id: c.id, body: c.body, author: this.name(c.user_id), mine: c.user_id === viewerId, votes: c.votes, voted: !!c.voted, createdAt: c.created_at,
+        id: c.id, body: c.body, author: c.author, mine: c.user_id === viewerId, votes: c.votes, voted: !!c.voted, createdAt: c.created_at,
       })),
       neighbors: this.neighbors(p),
       can: { veto: true, delete: p.uploader_id === viewerId, original: p.uploader_id === viewerId },
@@ -212,7 +208,7 @@ export class Photos {
       } catch {
         continue; // event deleted between query and lookup
       }
-      const developed = Date.now() >= unlock;
+      const developed = clock.now() >= unlock;
       let coverUrl: string | null = null;
       if (developed) {
         const cover = this.db.prepare('SELECT thumb_key FROM photos WHERE id = ?').get(r.first_id) as { thumb_key: string } | undefined;
@@ -235,16 +231,16 @@ export class Photos {
 
   /** "N years ago tonight": developed photos from today's month-day in earlier years. */
   async memories(viewerId: number) {
-    const today = nightOf(Date.now(), this.tz);
+    const today = nightOf(clock.now(), this.tz);
     const md = monthDay(today);
     const year = today.slice(0, 4);
     // Event photos take their night from the event; compare on both stored and event nights.
     const rows = this.db
       .prepare(
-        `SELECT p.* FROM photos p WHERE p.status = 'ready' AND substr(p.night, 6) = ? AND substr(p.night, 1, 4) < ?
+        `${SELECT_CARD} WHERE p.status = 'ready' AND substr(p.night, 6) = ? AND substr(p.night, 1, 4) < ?
          ORDER BY p.night DESC, p.taken_at LIMIT 60`,
       )
-      .all(md, year) as PhotoRow[];
+      .all(VOTE, md, year) as CardRow[];
     const groups = new Map<string, { night: string; yearsAgo: number; eventId: number | null; eventTitle: string | null; photos: unknown[] }>();
     for (const p of rows) {
       const night = this.rollNight(this.rollOf(p));
@@ -276,13 +272,13 @@ export class Photos {
     const width = int(input.width, 1, 20000, 'width');
     const height = int(input.height, 1, 20000, 'height');
     const sizes = {
-      original: int(input.sizes?.original, 1, LIMITS.originalBytes, 'That photo is too big (25 MB max)'),
+      original: int(input.sizes?.original, 1, LIMITS.originalBytes, `That photo is too big (${MAX_PHOTO_BYTES >> 20} MB max)`),
       display: int(input.sizes?.display, 1, LIMITS.displayBytes, 'display size'),
       thumb: int(input.sizes?.thumb, 1, LIMITS.thumbBytes, 'thumb size'),
     };
     const eventId = input.eventId === undefined || input.eventId === null || input.eventId === '' ? null : int(input.eventId, 1, Number.MAX_SAFE_INTEGER, 'eventId');
     // Trust the phone's capture time only if it is recent; otherwise it's "now".
-    const t = Date.now();
+    const t = clock.now();
     const claimed = typeof input.takenAt === 'string' ? Date.parse(input.takenAt) : NaN;
     const takenMs = Number.isFinite(claimed) && claimed <= t + 5 * 60_000 && claimed >= t - 72 * 3600_000 ? Math.min(claimed, t) : t;
     const roll = this.currentRoll(eventId, takenMs);
@@ -327,21 +323,20 @@ export class Photos {
       throw new HttpError(413, 'That photo is too big');
     }
     this.db.prepare(`UPDATE photos SET status = 'ready', bytes = ?, ready_at = ? WHERE id = ?`).run(o + d + th, now(), id);
-    this.ctx.bus?.emit?.('photos', { eventId: p.event_id, night: p.night });
+    this.ctx.bus.emit('live', { topic: 'photos' });
     return this.commitResult(p);
   }
 
   private commitResult(p: PhotoRow) {
     const roll = this.rollOf(p);
     const unlock = this.unlockAt(roll);
-    return { id: p.id, developed: Date.now() >= unlock, unlockAt: new Date(unlock).toISOString() };
+    return { id: p.id, developed: clock.now() >= unlock, unlockAt: new Date(unlock).toISOString() };
   }
 
   /** Delete the row and queue its objects for deletion, in one transaction. */
   private purge(p: PhotoRow) {
     tx(this.db, () => {
-      const q = this.db.prepare('INSERT INTO storage_deletes (storage_key) VALUES (?)');
-      for (const k of [p.original_key, p.display_key, p.thumb_key]) q.run(k);
+      for (const k of [p.original_key, p.display_key, p.thumb_key]) queueStorageDelete(this.db, k);
       this.db
         .prepare(`DELETE FROM reactions WHERE target_type = 'caption' AND target_id IN (SELECT id FROM photo_captions WHERE photo_id = ?)`)
         .run(p.id);
@@ -355,9 +350,9 @@ export class Photos {
     const p = this.visible(id);
     tx(this.db, () => {
       this.purge(p);
-      this.db.prepare('INSERT INTO photo_vetoes (user_id, event_id, night) VALUES (?, ?, ?)').run(userId, p.event_id, p.night);
+      this.db.prepare('INSERT INTO vetoes (user_id, event_id, night) VALUES (?, ?, ?)').run(userId, p.event_id, p.night);
     });
-    this.ctx.bus?.emit?.('photos', { eventId: p.event_id, night: p.night });
+    this.ctx.bus.emit('live', { topic: 'photos' });
     return { ok: true };
   }
 
@@ -366,7 +361,7 @@ export class Photos {
     const p = this.db.prepare('SELECT * FROM photos WHERE id = ? AND uploader_id = ?').get(id, userId) as PhotoRow | undefined;
     if (!p) throw new HttpError(404, 'Photo not found');
     this.purge(p);
-    this.ctx.bus?.emit?.('photos', { eventId: p.event_id, night: p.night });
+    this.ctx.bus.emit('live', { topic: 'photos' });
     return { ok: true };
   }
 
@@ -409,8 +404,22 @@ export class Photos {
   /** Wrapped hook: photos shot and vetoed by a member in a year. */
   stats(userId: number, year: string) {
     const shot = (this.db.prepare(`SELECT COUNT(*) AS n FROM photos WHERE uploader_id = ? AND status = 'ready' AND substr(night, 1, 4) = ?`).get(userId, year) as { n: number }).n;
-    const vetoed = (this.db.prepare(`SELECT COUNT(*) AS n FROM photo_vetoes WHERE user_id = ? AND substr(night, 1, 4) = ?`).get(userId, year) as { n: number }).n;
+    const vetoed = (this.db.prepare(`SELECT COUNT(*) AS n FROM vetoes WHERE user_id = ? AND substr(night, 1, 4) = ?`).get(userId, year) as { n: number }).n;
     return { shot, vetoed };
+  }
+
+  /**
+   * Member removal. keep: their photos stay, credited. anonymize: photos stay, and
+   * their captions go (captions are words, photos are the group's). delete: everything.
+   */
+  memberRemoved(userId: number, policy: 'keep' | 'anonymize' | 'delete') {
+    if (policy === 'keep') return;
+    const caps = this.db.prepare('SELECT id FROM photo_captions WHERE user_id = ?').all(userId) as { id: number }[];
+    for (const c of caps) this.db.prepare(`DELETE FROM reactions WHERE target_type = 'caption' AND target_id = ?`).run(c.id);
+    this.db.prepare('DELETE FROM photo_captions WHERE user_id = ?').run(userId);
+    if (policy === 'delete') {
+      for (const p of this.db.prepare('SELECT * FROM photos WHERE uploader_id = ?').all(userId) as PhotoRow[]) this.purge(p);
+    }
   }
 
   // ------------------------------------------------------------- tick
@@ -422,7 +431,7 @@ export class Photos {
    *  - drop pending uploads abandoned for over 2h.
    */
   tick() {
-    const t = Date.now();
+    const t = clock.now();
     const recent = new Date(t - 4 * 86400_000).toISOString();
     const rolls = this.db
       .prepare(
@@ -470,7 +479,7 @@ export class Photos {
   }
 
   private claimJob(key: string): boolean {
-    return this.db.prepare('INSERT OR IGNORE INTO jobs_sent (key) VALUES (?)').run(key).changes === 1;
+    return this.db.prepare('INSERT OR IGNORE INTO jobs_sent (key, sent_at) VALUES (?, ?)').run(key, now()).changes === 1;
   }
 
   private feed(kind: string, eventId: number | null, body: string) {

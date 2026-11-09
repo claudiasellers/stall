@@ -2,28 +2,13 @@
 // Registered in app/src/modules/index.ts. Routes mount at /api/v1 behind
 // requireMember + CSRF (foundation), all under /photos.
 import express, { type Request } from 'express';
+import type { ModuleCtx, StallModule } from '../types.ts';
 import { HttpError } from '../../service.ts';
 import { migrations } from './schema.ts';
 import { Photos, type Roll } from './service.ts';
 
-/** The slice of the foundation's module ctx this module uses. */
-export type PhotoCtx = {
-  db: import('../../db.ts').Db;
-  cfg: { houseTz?: string } & Record<string, unknown>;
-  svc: { notifyMembers(body: string, link: string, exceptId?: number): void };
-  bus?: { emit(event: string, data?: unknown): unknown };
-  house?: { photoUnlockHour?: number };
-  storage: {
-    kind: string;
-    uploadTarget(key: string, mime: string): unknown;
-    readUrl(key: string): string | Promise<string>;
-    size(key: string): number | null | undefined | Promise<number | null | undefined>;
-    delete(key: string): unknown;
-  };
-};
-
 const instances = new WeakMap<object, Photos>();
-const photosFor = (ctx: PhotoCtx) => {
+const photosFor = (ctx: ModuleCtx) => {
   let p = instances.get(ctx);
   if (!p) instances.set(ctx, (p = new Photos(ctx)));
   return p;
@@ -31,7 +16,7 @@ const photosFor = (ctx: PhotoCtx) => {
 
 const NIGHT_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-function routes(ctx: PhotoCtx) {
+function routes(ctx: ModuleCtx) {
   const photos = photosFor(ctx);
   const r = express.Router();
   const uid = (req: Request) => req.user!.id;
@@ -82,12 +67,13 @@ function routes(ctx: PhotoCtx) {
   return r;
 }
 
-export const module = {
+export const module: StallModule = {
   name: 'photos',
   migrations,
   routes,
-  tick: (ctx: PhotoCtx) => photosFor(ctx).tick(),
+  tick: (ctx) => photosFor(ctx).tick(),
+  onMemberRemoved: (ctx, userId, policy) => photosFor(ctx).memberRemoved(userId, policy),
 };
 
 /** For Wrapped: photos shot and vetoed by a member in a year. */
-export const photoStats = (ctx: PhotoCtx, userId: number, year: string) => photosFor(ctx).stats(userId, year);
+export const photoStats = (ctx: ModuleCtx, userId: number, year: string) => photosFor(ctx).stats(userId, year);

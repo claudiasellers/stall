@@ -12,7 +12,7 @@ import * as core from '../core.js';
 const api = core.api;
 const h = core.h;
 const toast = core.toast || ((m) => console.log(m));
-const userName = () => core.state?.user?.displayName || core.state?.user?.display_name || core.state?.user?.username || 'you';
+const userName = () => core.state?.user?.name || core.state?.user?.username || 'you';
 
 // Our stylesheet, loaded once (CSP allows same-origin styles).
 if (!document.querySelector('link[data-photos-css]')) {
@@ -370,7 +370,20 @@ export function photoSection(event) {
     }
   };
   load();
+  liveReload(box, load);
   return box;
+}
+
+/** Re-run load() on 'stall:photos' live events while box is on screen. */
+function liveReload(box, load) {
+  let t;
+  const on = () => {
+    if (!box.isConnected) return window.removeEventListener('stall:photos', on);
+    if (document.querySelector('.ph-viewer')) return; // don't yank the album out from under the viewer
+    clearTimeout(t);
+    t = setTimeout(load, 400);
+  };
+  window.addEventListener('stall:photos', on);
 }
 
 /** A no-event night's roll (spontaneous nights, or an event that was deleted). */
@@ -385,6 +398,7 @@ export function nightSection(night) {
     }
   };
   load();
+  liveReload(box, load);
   return box;
 }
 
@@ -587,12 +601,10 @@ function captionBattle(photoId, captions, refresh) {
 }
 
 // ------------------------------------------------------------------ routes
-/**
- * Optional pages. Pass the shell's route() and a wrapper that renders a page
- * with a title, e.g. registerPhotoRoutes(route, (title, node) => mount(shell({ title, back: '/' }, node))).
- */
-export function registerPhotoRoutes(route, page) {
-  route('/photos', async () => page('Camera roll', rollsSection()));
-  route('/photos/night/:night', async ({ night }) => page(nightLabel(night), nightSection(night)));
-  route('/photos/memories', async () => page('Years ago tonight', memoriesSection()));
-}
+const page = (title, node) => core.mount(core.shell({ title, back: '/' }, node));
+core.route('/photos', async () => page('Camera roll', [rollsSection(), h('a', { class: 'btn ghost sm', href: '#/photos/memories' }, '🕰️ Years ago tonight')]));
+core.route('/photos/night/:night', async ({ night }) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(night)) return core.go('/photos');
+  page(nightLabel(night), nightSection(night));
+});
+core.route('/photos/memories', async () => page('Years ago tonight', memoriesSection()));

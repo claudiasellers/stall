@@ -41,16 +41,18 @@ export const migrations = [
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
     CREATE INDEX photo_captions_photo ON photo_captions(photo_id);
+    CREATE INDEX photo_captions_user ON photo_captions(user_id);
 
     -- Who killed how many photos. No photo id: the photo no longer exists.
-    CREATE TABLE photo_vetoes (
+    CREATE TABLE vetoes (
       id INTEGER PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       event_id INTEGER REFERENCES events(id) ON DELETE SET NULL,
       night TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
-    CREATE INDEX photo_vetoes_user ON photo_vetoes(user_id, created_at);
+    CREATE INDEX vetoes_user ON vetoes(user_id, created_at);
+    CREATE INDEX vetoes_event ON vetoes(event_id);
     `,
   },
 ];
