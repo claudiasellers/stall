@@ -128,27 +128,95 @@ async function uploadOne(file, eventId) {
   return api(`/photos/${reserved.id}/commit`, { method: 'POST', body: {} });
 }
 
+
+// ------------------------------------------------------------------ offline film
+// Basements have no signal. A shot that fails to upload waits in IndexedDB and
+// goes up the next time the app is online, keeping its capture time.
+const DB_NAME = 'stall-photos';
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB_NAME, 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('queue', { keyPath: 'id', autoIncrement: true });
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  });
+}
+async function idbDo(mode, fn) {
+  const db = await idb();
+  return new Promise((res, rej) => {
+    const t = db.transaction('queue', mode);
+    const out = fn(t.objectStore('queue'));
+    t.oncomplete = () => res(out?.result ?? out);
+    t.onerror = () => rej(t.error);
+  });
+}
+async function enqueue(file, eventId) {
+  try {
+    await idbDo('readwrite', (s) => s.add({ blob: file, type: file.type, lastModified: file.lastModified || Date.now(), eventId: eventId ?? null }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function queued() {
+  try {
+    return await idbDo('readonly', (s) => s.getAll());
+  } catch {
+    return [];
+  }
+}
+let flushing = false;
+/** Upload whatever is waiting. Returns how many went up. */
+export async function flushQueue() {
+  if (flushing || !navigator.onLine) return 0;
+  flushing = true;
+  let sent = 0;
+  try {
+    for (const item of await queued()) {
+      const file = new File([item.blob], 'photo', { type: item.type, lastModified: item.lastModified });
+      try {
+        await uploadOne(file, item.eventId);
+        await idbDo('readwrite', (s) => s.delete(item.id));
+        sent++;
+      } catch (e) {
+        // 4xx other than timeouts/rate limits means it will never succeed: drop it.
+        if (e.status >= 400 && e.status < 500 && e.status !== 408 && e.status !== 429) await idbDo('readwrite', (s) => s.delete(item.id));
+        else break;
+      }
+    }
+  } finally {
+    flushing = false;
+  }
+  if (sent) toast(`${sent} photo${sent === 1 ? '' : 's'} from earlier made it onto the roll`);
+  return sent;
+}
+window.addEventListener('online', () => flushQueue());
+
 /** Upload a batch, two at a time, with a live counter on the button. */
 async function uploadMany(files, eventId, onProgress) {
   const list = [...files];
   let done = 0;
   let failed = 0;
   let last = null;
+  let queuedCount = 0;
   const worker = async () => {
     while (list.length) {
       const f = list.shift();
       try {
         last = await uploadOne(f, eventId);
       } catch (e) {
+        // Offline / network / server hiccup: keep the film and retry later.
+        if ((!e.status || e.status >= 500 || e.status === 408) && (await enqueue(f, eventId))) queuedCount++;
+        else toast(e.message || 'One photo didn’t upload');
         failed++;
-        toast(e.message || 'One photo didn’t upload');
       }
       done++;
       onProgress?.(done, done + list.length);
     }
   };
   await Promise.all([worker(), worker()]);
-  return { done: done - failed, failed, last };
+  if (queuedCount) toast(`No signal. ${queuedCount} shot${queuedCount === 1 ? '' : 's'} saved on your phone, will upload when you’re back online.`);
+  return { done: done - failed, failed, queued: queuedCount, last };
 }
 
 // ------------------------------------------------------------------ watermark
@@ -294,6 +362,7 @@ export function photoSection(event) {
   const box = h('section', { class: 'ph-section', 'aria-label': 'Photos' }, h('h2', {}, '📸 The roll'), h('div', { class: 'ph-loading' }, 'Loading film…'));
   const load = async () => {
     try {
+      await flushQueue();
       const data = await api(`/photos/roll?event=${event.id}`);
       fill(box, h('h2', {}, '📸 The roll'), data.roll.developed ? developedRoll(data, event.id, load) : lockedRoll(data.roll, event.id, load));
     } catch (e) {
