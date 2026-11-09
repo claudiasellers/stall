@@ -15,7 +15,11 @@ import type { ModuleCtx, StallModule } from '../types.ts';
 
 type Db = ModuleCtx['db'];
 const ATTENDING = `('in','afters','late','save_drink')`;
-const PUBLIC_REGRET = `(p.anonymous = 0 OR p.unmasked_at IS NOT NULL)`;
+/** Authorship the group may see (anonymous posts and anonymized ex-members hide the author on every kind). */
+const PUBLIC_AUTHOR = `(p.anonymous = 0 OR p.unmasked_at IS NOT NULL)`;
+const PUBLIC_REGRET = PUBLIC_AUTHOR;
+/** Read-time visibility for posts: self-destructed rows don't count before the purge runs. */
+const VISIBLE = () => `(p.expires_at IS NULL OR p.expires_at > '${new Date(clock.now()).toISOString()}')`;
 
 /** Run one stat query; a missing module (no such table/column) yields undefined. */
 function one<T>(db: Db, sql: string, ...args: (string | number | null)[]): T | undefined {
@@ -85,11 +89,11 @@ export function wrappedFor(ctx: ModuleCtx, userId: number, year: number) {
   if (closer?.n) push({ id: 'closer', kicker: 'The bar you closed down most', big: closer.venue, line: `Last stop ${closer.n} time${closer.n === 1 ? '' : 's'}. They know your order.`, tone: 'night' });
 
   // 4. Quotes: most-reacted line said by you, and how often you were quoted.
-  const quoted = n(one(db, `SELECT COUNT(*) AS n FROM posts p WHERE p.kind = 'quote' AND p.subject_id = ? AND p.created_at >= ? AND p.created_at < ?`, userId, from, end));
+  const quoted = n(one(db, `SELECT COUNT(*) AS n FROM posts p WHERE ${VISIBLE()} AND p.kind = 'quote' AND p.subject_id = ? AND p.created_at >= ? AND p.created_at < ?`, userId, from, end));
   const topQuote = one<{ body: string; n: number }>(db,
     `SELECT p.body, COUNT(r.user_id) AS n FROM posts p
      LEFT JOIN reactions r ON r.target_type = 'post' AND r.target_id = p.id
-     WHERE p.kind = 'quote' AND p.subject_id = ? AND p.created_at >= ? AND p.created_at < ?
+     WHERE ${VISIBLE()} AND p.kind = 'quote' AND p.subject_id = ? AND p.created_at >= ? AND p.created_at < ?
      GROUP BY p.id ORDER BY n DESC, p.id DESC LIMIT 1`, userId, from, end);
   if (topQuote) push({ id: 'quote', kicker: `Your most-quoted line (quoted ${quoted} time${quoted === 1 ? '' : 's'})`, big: `“${topQuote.body}”`, line: topQuote.n ? `${topQuote.n} reactions. You said that out loud.` : 'You said that out loud.', tone: 'gold' });
   else if (quoted === 0) push({ id: 'quote', kicker: 'Quote Wall', big: '0', line: 'times quoted. Say something unhinged next year.', tone: 'gold' });
@@ -103,13 +107,13 @@ export function wrappedFor(ctx: ModuleCtx, userId: number, year: number) {
   // 6. Regrets (your own count includes anonymous ones; only you see this).
   const regrets = one<{ n: number; worst: number | null; forgiven: number }>(db,
     `SELECT COUNT(*) AS n, MAX(severity) AS worst, COALESCE(SUM(status = 'forgiven'), 0) AS forgiven FROM posts p
-     WHERE p.kind = 'regret' AND p.author_id = ? AND p.created_at >= ? AND p.created_at < ?`, userId, from, end);
+     WHERE ${VISIBLE()} AND p.kind = 'regret' AND p.author_id = ? AND p.created_at >= ? AND p.created_at < ?`, userId, from, end);
   const SEV = ['', '🫠', '😬', '💀', '🚨', '🪦'];
   if (regrets)
     push({ id: 'regrets', kicker: 'The Morning After', big: String(regrets.n), line: regrets.n ? `regret${regrets.n === 1 ? '' : 's'} confessed. Worst: ${SEV[regrets.worst ?? 0] || '🫠'}. ${regrets.forgiven} forgiven.` : 'regrets. Either a saint or a liar.', tone: 'shame' });
 
   // 7. Irish goodbyes.
-  const goodbyes = n(one(db, `SELECT COUNT(*) AS n FROM posts p WHERE p.kind = 'irish_goodbye' AND p.subject_id = ? AND p.created_at >= ? AND p.created_at < ?`, userId, from, end));
+  const goodbyes = n(one(db, `SELECT COUNT(*) AS n FROM posts p WHERE ${VISIBLE()} AND p.kind = 'irish_goodbye' AND p.subject_id = ? AND p.created_at >= ? AND p.created_at < ?`, userId, from, end));
   if (goodbyes !== null)
     push({ id: 'goodbyes', kicker: 'Irish Goodbyes', big: String(goodbyes), line: goodbyes ? `time${goodbyes === 1 ? '' : 's'} you vanished without a word.` : 'You said bye every time. Weird, but okay.', tone: 'night' });
 
@@ -122,8 +126,8 @@ export function wrappedFor(ctx: ModuleCtx, userId: number, year: number) {
   // 9. Group: Liability of the Year (public regrets + Irish goodbyes + cooked 9+ nights).
   const liability = one<{ name: string; score: number; id: number }>(db,
     `SELECT u.id, ${NAME} AS name,
-       (SELECT COUNT(*) FROM posts p WHERE p.kind = 'regret' AND p.author_id = u.id AND ${PUBLIC_REGRET} AND p.created_at >= ? AND p.created_at < ?)
-     + (SELECT COUNT(*) FROM posts p WHERE p.kind = 'irish_goodbye' AND p.subject_id = u.id AND p.created_at >= ? AND p.created_at < ?) AS score
+       (SELECT COUNT(*) FROM posts p WHERE ${VISIBLE()} AND p.kind = 'regret' AND p.author_id = u.id AND ${PUBLIC_REGRET} AND p.created_at >= ? AND p.created_at < ?)
+     + (SELECT COUNT(*) FROM posts p WHERE ${VISIBLE()} AND p.kind = 'irish_goodbye' AND p.subject_id = u.id AND p.created_at >= ? AND p.created_at < ?) AS score
      FROM users u WHERE u.removed_at IS NULL ORDER BY score DESC, u.id LIMIT 1`, from, end, from, end);
   if (liability?.score)
     push({ id: 'liability', kicker: `${year} Liability of the Year`, big: liability.id === userId ? 'You.' : liability.name, line: liability.id === userId ? 'Congratulations, and also: are you okay?' : 'The group has spoken. Drinks are on them.', tone: 'shame' });
@@ -133,7 +137,7 @@ export function wrappedFor(ctx: ModuleCtx, userId: number, year: number) {
     `SELECT p.body, COALESCE(${NAME}, p.subject_label) AS who, COUNT(r.user_id) AS n FROM posts p
      LEFT JOIN users u ON u.id = p.subject_id
      JOIN reactions r ON r.target_type = 'post' AND r.target_id = p.id
-     WHERE p.kind = 'quote' AND p.created_at >= ? AND p.created_at < ?
+     WHERE ${VISIBLE()} AND p.kind = 'quote' AND p.created_at >= ? AND p.created_at < ?
      GROUP BY p.id ORDER BY n DESC, p.id LIMIT 1`, from, end);
   if (qoty) push({ id: 'qoty', kicker: 'Quote of the Year', big: `“${qoty.body}”`, line: `${qoty.who ?? 'Someone'}, ${qoty.n} reactions.`, tone: 'gold' });
 
@@ -154,20 +158,20 @@ export function halls(ctx: ModuleCtx) {
   };
   const fame = [
     board('nights', 'Most nights out', 'nights', `SELECT r.user_id AS uid, COUNT(*) AS n FROM rsvps r JOIN events e ON e.id = r.event_id WHERE r.status IN ${ATTENDING} AND e.cancelled_at IS NULL GROUP BY r.user_id`),
-    board('quoted', 'Most quoted', 'quotes', `SELECT subject_id AS uid, COUNT(*) AS n FROM posts WHERE kind = 'quote' AND subject_id IS NOT NULL GROUP BY subject_id`),
+    board('quoted', 'Most quoted', 'quotes', `SELECT subject_id AS uid, COUNT(*) AS n FROM posts p WHERE ${VISIBLE()} AND kind = 'quote' AND subject_id IS NOT NULL GROUP BY subject_id`),
     board('photog', 'House photographer', 'photos', `SELECT uploader_id AS uid, COUNT(*) AS n FROM photos WHERE status = 'ready' GROUP BY uploader_id`),
     board('captions', 'Caption champion', 'winning votes', `SELECT c.user_id AS uid, COUNT(*) AS n FROM photo_captions c JOIN reactions r ON r.target_type = 'caption' AND r.target_id = c.id AND r.user_id <> c.user_id GROUP BY c.user_id`),
     board('host', 'Host with the most', 'events', `SELECT host_id AS uid, COUNT(*) AS n FROM events WHERE cancelled_at IS NULL GROUP BY host_id`),
     board('generous', 'Covered the bottle', 'tabs picked up', `SELECT payer_id AS uid, COUNT(*) AS n FROM tab_expenses GROUP BY payer_id`),
-    board('finder', 'Lost & Found hero', 'items returned', `SELECT resolved_by AS uid, COUNT(*) AS n FROM posts WHERE kind = 'lost_item' AND status = 'found' AND resolved_by IS NOT NULL GROUP BY resolved_by`),
+    board('finder', 'Lost & Found hero', 'items returned', `SELECT resolved_by AS uid, COUNT(*) AS n FROM posts p WHERE ${VISIBLE()} AND kind = 'lost_item' AND status = 'found' AND resolved_by IS NOT NULL GROUP BY resolved_by`),
   ].filter(Boolean);
   const shame = [
-    board('goodbyes', 'Disappearing Act', 'Irish goodbyes', `SELECT subject_id AS uid, COUNT(*) AS n FROM posts WHERE kind = 'irish_goodbye' AND subject_id IS NOT NULL GROUP BY subject_id`),
-    board('regrets', 'Most public regrets', 'regrets', `SELECT p.author_id AS uid, COUNT(*) AS n FROM posts p WHERE p.kind = 'regret' AND ${PUBLIC_REGRET} GROUP BY p.author_id`),
-    board('lawyer', 'Needs a lawyer', '🚨+ regrets', `SELECT p.author_id AS uid, COUNT(*) AS n FROM posts p WHERE p.kind = 'regret' AND p.severity >= 4 AND ${PUBLIC_REGRET} GROUP BY p.author_id`),
+    board('goodbyes', 'Disappearing Act', 'Irish goodbyes', `SELECT subject_id AS uid, COUNT(*) AS n FROM posts p WHERE ${VISIBLE()} AND kind = 'irish_goodbye' AND subject_id IS NOT NULL GROUP BY subject_id`),
+    board('regrets', 'Most public regrets', 'regrets', `SELECT p.author_id AS uid, COUNT(*) AS n FROM posts p WHERE ${VISIBLE()} AND p.kind = 'regret' AND ${PUBLIC_REGRET} GROUP BY p.author_id`),
+    board('lawyer', 'Needs a lawyer', '🚨+ regrets', `SELECT p.author_id AS uid, COUNT(*) AS n FROM posts p WHERE ${VISIBLE()} AND p.kind = 'regret' AND p.severity >= 4 AND ${PUBLIC_REGRET} GROUP BY p.author_id`),
     board('cooked', 'Most cooked (avg)', '/ 10', `SELECT user_id AS uid, AVG(level) AS n FROM cooked_reports GROUP BY user_id HAVING COUNT(*) >= 3`),
-    board('lost', 'Loses everything', 'items lost', `SELECT author_id AS uid, COUNT(*) AS n FROM posts WHERE kind = 'lost_item' GROUP BY author_id`),
-    board('disputed', 'Denies everything', 'disputed quotes', `SELECT subject_id AS uid, COUNT(*) AS n FROM posts WHERE kind = 'quote' AND stance = 'disputed' GROUP BY subject_id`),
+    board('lost', 'Loses everything', 'items lost', `SELECT p.author_id AS uid, COUNT(*) AS n FROM posts p WHERE ${VISIBLE()} AND p.kind = 'lost_item' AND ${PUBLIC_AUTHOR} GROUP BY p.author_id`),
+    board('disputed', 'Denies everything', 'disputed quotes', `SELECT subject_id AS uid, COUNT(*) AS n FROM posts p WHERE ${VISIBLE()} AND kind = 'quote' AND stance = 'disputed' GROUP BY subject_id`),
     board('vetoes', 'Camera shy', 'photos vetoed', `SELECT user_id AS uid, COUNT(*) AS n FROM vetoes GROUP BY user_id`),
   ].filter(Boolean);
   return { fame, shame };

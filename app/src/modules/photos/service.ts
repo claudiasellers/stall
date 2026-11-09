@@ -356,10 +356,10 @@ export class Photos {
     return { ok: true };
   }
 
-  /** The uploader can take back their own shot at any time, developed or not. */
-  remove(id: number, userId: number) {
-    const p = this.db.prepare('SELECT * FROM photos WHERE id = ? AND uploader_id = ?').get(id, userId) as PhotoRow | undefined;
-    if (!p) throw new HttpError(404, 'Photo not found');
+  /** The uploader can take back their own shot at any time, developed or not; admins can remove any (moderation). */
+  remove(id: number, userId: number, isAdmin = false) {
+    const p = this.db.prepare('SELECT * FROM photos WHERE id = ?').get(id) as PhotoRow | undefined;
+    if (!p || (p.uploader_id !== userId && !isAdmin)) throw new HttpError(404, 'Photo not found');
     this.purge(p);
     this.ctx.bus.emit('live', { topic: 'photos' });
     return { ok: true };
@@ -391,14 +391,57 @@ export class Photos {
     return { ok: true };
   }
 
-  deleteCaption(captionId: number, userId: number) {
+  deleteCaption(captionId: number, userId: number, isAdmin = false) {
     const c = this.db.prepare('SELECT user_id FROM photo_captions WHERE id = ?').get(captionId) as { user_id: number } | undefined;
-    if (!c || c.user_id !== userId) throw new HttpError(404, 'Caption not found');
+    if (!c || (c.user_id !== userId && !isAdmin)) throw new HttpError(404, 'Caption not found');
     tx(this.db, () => {
       this.db.prepare(`DELETE FROM reactions WHERE target_type = 'caption' AND target_id = ?`).run(captionId);
       this.db.prepare('DELETE FROM photo_captions WHERE id = ?').run(captionId);
     });
     return { ok: true };
+  }
+
+  /** Admin moderation: who vetoed what, newest first. */
+  vetoLog(isAdmin: boolean, before?: string, limit = 50) {
+    if (!isAdmin) throw new HttpError(403, 'Admins only');
+    const rows = this.db.prepare(
+      `SELECT v.id, v.user_id AS userId, COALESCE(u.display_name, u.username) AS name, v.event_id AS eventId,
+              e.title AS eventTitle, v.night, v.created_at AS createdAt
+       FROM vetoes v JOIN users u ON u.id = v.user_id LEFT JOIN events e ON e.id = v.event_id
+       WHERE v.created_at < ? ORDER BY v.created_at DESC LIMIT ?`,
+    ).all(before || '9999', Math.min(Math.max(1, limit), 100));
+    return { vetoes: rows };
+  }
+
+  /**
+   * Admin moderation list, newest first. Undeveloped photos are listed with
+   * thumbUrl null: admins can delete them, but the disposable-camera rule (nobody
+   * sees a roll before it develops) holds for admins too.
+   */
+  async adminList(isAdmin: boolean, before?: string, limit = 50) {
+    if (!isAdmin) throw new HttpError(403, 'Admins only');
+    const rows = this.db.prepare(
+      `SELECT p.*, COALESCE(u.display_name, u.username) AS uploader_name, e.title AS event_title
+       FROM photos p JOIN users u ON u.id = p.uploader_id LEFT JOIN events e ON e.id = p.event_id
+       WHERE p.status = 'ready' AND p.created_at < ? ORDER BY p.created_at DESC LIMIT ?`,
+    ).all(before || '9999', Math.min(Math.max(1, limit), 100)) as (PhotoRow & { uploader_name: string; event_title: string | null })[];
+    const t = clock.now();
+    const photos = [];
+    for (const p of rows) {
+      let developed = false;
+      try { developed = this.isDeveloped(this.rollOf(p), t); } catch { /* event vanished mid-query */ }
+      photos.push({
+        id: p.id,
+        uploader: p.uploader_name,
+        eventTitle: p.event_title,
+        night: p.night,
+        takenAt: p.taken_at,
+        createdAt: p.created_at,
+        developed,
+        thumbUrl: developed ? await this.ctx.storage.readUrl(p.thumb_key) : null,
+      });
+    }
+    return { photos };
   }
 
   /** Wrapped hook: photos shot and vetoed by a member in a year. */
