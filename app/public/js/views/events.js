@@ -463,6 +463,9 @@ route('/events/:id', async ({ id }, alive) => {
             (a.irishGoodbyes ?? a.irishGoodbyesPosts) != null ? stat('👻', a.irishGoodbyes ?? a.irishGoodbyesPosts, 'Irish goodbyes') : null,
             a.tab !== null ? stat('💸', a.tab, 'on the tab') : null,
             a.checkins !== null && a.checkins !== undefined ? stat('📍', a.checkins, 'check-ins') : null),
+          a.topQuote ? h('blockquote', { class: 'ev-topquote' }, `“${a.topQuote.body}”`, h('cite', {}, `— ${a.topQuote.speaker}`)) : null,
+          a.tabTotalCents ? h('p', { class: 'small' }, `💸 The night cost $${(a.tabTotalCents / 100).toFixed(2)} on the Tab`) : null,
+          a.leftEarly?.length ? h('p', { class: 'small' }, '👻 Left without saying bye: ', a.leftEarly.map((l) => `${l.emoji ? l.emoji + ' ' : ''}${l.name}`).join(', ')) : null,
           a.liars.length ? h('p', { class: 'small' }, '🤥 Said maybe, meant no: ', a.liars.map((l) => l.name).join(', ')) : null,
           a.flipFlopper ? h('p', { class: 'small' }, `🔁 Flip-flopper of the night: ${a.flipFlopper.name} (${a.flipFlopper.n} changes)`) : null)
       : null;
